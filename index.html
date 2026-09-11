@@ -7,7 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.5.7.4</title>
+  <title>BAKERU 商品・在庫管理 v2.6.1</title>
+  <!-- BAKERU_BUILD: 2.6.1-sidebar-verified -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -16,7 +17,12 @@
     html,body,#root{min-height:100%;margin:0}body{background:#f9fafb;color:#111827}*{box-sizing:border-box}button,input,select,textarea{font:inherit}
     #boot{max-width:520px;margin:18vh auto;padding:28px;font-family:system-ui,-apple-system,sans-serif;text-align:center;color:#374151}
     #boot .mark{width:64px;height:64px;margin:0 auto 14px;border-radius:18px;background:#064e3b;color:white;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:28px}
-  </style>
+  
+    .bakeru-sidebar-scroll{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#64748b #030712;}
+    .bakeru-sidebar-scroll::-webkit-scrollbar{width:8px;}
+    .bakeru-sidebar-scroll::-webkit-scrollbar-track{background:#030712;}
+    .bakeru-sidebar-scroll::-webkit-scrollbar-thumb{background:#64748b;border-radius:999px;border:2px solid #030712;}
+</style>
   <script>
     window.addEventListener('error', function(e) {
       console.error('BAKERU global error', e.error || e.message);
@@ -46,7 +52,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
 /*
-  BAKERU 商品・在庫管理 v2.5.7.6
+  BAKERU 商品・在庫管理 v2.6.1
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -414,18 +420,18 @@ function App() {
     const pageTitle = ((_a = nav.find(n => n[0] === activeTab)) === null || _a === void 0 ? void 0 : _a[1]) || 'BAKERU';
     const commonProps = { inventory, setInventory, transactions, setTransactions, alerts, setAlerts, api, saveProduct, recordMovement, pullFromSheet };
     return (React.createElement("div", { className: "min-h-screen bg-gray-50 text-gray-900 font-sans md:flex" },
-        React.createElement("aside", { className: "hidden md:flex w-64 bg-gray-950 text-white h-screen flex-col fixed inset-y-0 left-0 z-30 overflow-y-auto overscroll-contain bakeru-sidebar-scroll" },
+        React.createElement("aside", { className: "hidden md:flex w-64 bg-gray-950 text-white h-screen flex-col fixed inset-y-0 left-0 z-30 overflow-hidden" },
             React.createElement(Brand, null),
-            React.createElement("nav", { className: "flex-none p-4 space-y-1" }, nav.map(([id, label, Icon]) => (React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => setActiveTab(id) })))),
-            React.createElement("div", { className: "p-4 border-t border-gray-800 text-xs" },
+            React.createElement("nav", { className: "flex-1 min-h-0 p-4 space-y-1 overflow-y-scroll overscroll-contain bakeru-sidebar-scroll" }, nav.map(([id, label, Icon]) => (React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => setActiveTab(id) })))),
+            React.createElement("div", { className: "flex-none p-4 border-t border-gray-800 text-xs bg-gray-950" },
                 React.createElement(ConnectionBadge, { status: connection }))),
         mobileMenuOpen && (React.createElement("div", { className: "md:hidden fixed inset-0 z-50 bg-black/50", onClick: () => setMobileMenuOpen(false) },
-            React.createElement("div", { className: "w-[82%] max-w-xs h-full bg-gray-950 text-white shadow-2xl overflow-y-auto overscroll-contain bakeru-sidebar-scroll", onClick: e => e.stopPropagation() },
+            React.createElement("div", { className: "w-[82%] max-w-xs h-full bg-gray-950 text-white shadow-2xl flex flex-col overflow-hidden", onClick: e => e.stopPropagation() },
                 React.createElement("div", { className: "flex justify-between items-center pr-3" },
                     React.createElement(Brand, null),
                     React.createElement("button", { onClick: () => setMobileMenuOpen(false) },
                         React.createElement(X, null))),
-                React.createElement("nav", { className: "p-4 space-y-1" }, nav.map(([id, label, Icon]) => (React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => { setActiveTab(id); setMobileMenuOpen(false); } }))))))),
+                React.createElement("nav", { className: "flex-1 min-h-0 p-4 space-y-1 overflow-y-scroll overscroll-contain bakeru-sidebar-scroll" }, nav.map(([id, label, Icon]) => (React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => { setActiveTab(id); setMobileMenuOpen(false); } }))))))),
         React.createElement("main", { className: "flex-1 md:ml-64 min-w-0 pb-24 md:pb-0" },
             React.createElement("header", { className: "sticky top-0 z-20 bg-white border-b-2 border-gray-200 h-16 flex items-center justify-between px-4 md:px-7" },
                 React.createElement("div", { className: "flex items-center gap-3 min-w-0" },
@@ -460,7 +466,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.1")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.0")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -1391,7 +1397,7 @@ if (typeof document !== 'undefined' && !document.getElementById('bakeru-v23-styl
     .input{width:100%;border:2px solid #d1d5db;border-radius:.75rem;padding:.65rem .8rem;background:#fff;color:#111827;outline:none;min-height:44px}
     .input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
     .input:disabled{background:#f3f4f6;color:#6b7280}
-    .bakeru-sidebar-scroll{scrollbar-width:thin;scrollbar-color:#64748b #020617;-webkit-overflow-scrolling:touch;}
+    .bakeru-sidebar-scroll{scrollbar-width:thin;scrollbar-color:#64748b #020617;-webkit-overflow-scrolling:touch;overflow-y:auto!important;min-height:0;touch-action:pan-y;}
     .bakeru-sidebar-scroll::-webkit-scrollbar{width:9px;}
     .bakeru-sidebar-scroll::-webkit-scrollbar-track{background:#020617;}
     .bakeru-sidebar-scroll::-webkit-scrollbar-thumb{background:#475569;border-radius:999px;border:2px solid #020617;}
