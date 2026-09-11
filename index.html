@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.6.2</title>
-  <!-- BAKERU_BUILD: 2.6.2-persistent-scrollbar -->
+  <title>BAKERU 商品・在庫管理 v2.6.3</title>
+  <!-- BAKERU_BUILD: 2.6.3-real-scroll -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -23,14 +23,18 @@
     .bakeru-sidebar-scroll::-webkit-scrollbar-track{background:#030712;}
     .bakeru-sidebar-scroll::-webkit-scrollbar-thumb{background:#64748b;border-radius:999px;border:2px solid #030712;}
 
-    /* v2.6.2: 左メニューに常時見える専用スクロールレール */
-    .bakeru-menu-scroll-wrap{position:relative;flex:1;min-height:0;overflow:hidden;}
-    .bakeru-menu-scroll-nav{height:100%;overflow-y:auto!important;overscroll-behavior:contain;padding-right:28px!important;scrollbar-width:none;}
-    .bakeru-menu-scroll-nav::-webkit-scrollbar{width:0;height:0;}
-    .bakeru-menu-rail{position:absolute;right:7px;top:12px;bottom:12px;width:10px;border-radius:999px;background:#111827;border:1px solid #334155;box-shadow:inset 0 0 0 1px rgba(255,255,255,.03);cursor:pointer;z-index:5;}
-    .bakeru-menu-thumb{position:absolute;left:2px;right:2px;min-height:54px;border-radius:999px;background:#94a3b8;box-shadow:0 1px 4px rgba(0,0,0,.35);transition:top .08s linear,height .08s linear;}
-    .bakeru-menu-rail:hover .bakeru-menu-thumb{background:#cbd5e1;}
-    .bakeru-menu-scroll-hint{position:absolute;right:3px;bottom:3px;font-size:9px;color:#94a3b8;writing-mode:vertical-rl;letter-spacing:.08em;pointer-events:none;opacity:.9;}
+    /* v2.6.3: PCは実際にスクロール量が生まれる高さに制限。ネイティブ縦スクロールを使用 */
+    .bakeru-menu-scroll-wrap{position:relative;min-height:0;overflow:hidden;}
+    .bakeru-menu-scroll-wrap.bakeru-menu-desktop{flex:0 0 min(340px,calc(100vh - 190px));height:min(340px,calc(100vh - 190px));min-height:240px;border-bottom:1px solid #1f2937;}
+    .bakeru-menu-scroll-wrap.bakeru-menu-mobile{flex:1;min-height:0;}
+    .bakeru-menu-scroll-nav{height:100%;overflow-y:scroll!important;overscroll-behavior:contain;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch;touch-action:pan-y;padding-right:10px!important;scrollbar-width:auto;scrollbar-color:#94a3b8 #111827;}
+    .bakeru-menu-scroll-nav::-webkit-scrollbar{width:11px;}
+    .bakeru-menu-scroll-nav::-webkit-scrollbar-track{background:#111827;border-left:1px solid #1f2937;}
+    .bakeru-menu-scroll-nav::-webkit-scrollbar-thumb{background:#94a3b8;border-radius:999px;border:2px solid #111827;min-height:48px;}
+    .bakeru-menu-scroll-nav::-webkit-scrollbar-thumb:hover{background:#cbd5e1;}
+    .bakeru-scroll-controls{position:absolute;right:18px;bottom:8px;display:flex;gap:5px;z-index:7;}
+    .bakeru-scroll-btn{width:30px;height:30px;border-radius:9px;background:#1f2937;border:1px solid #64748b;color:#f8fafc;font-weight:900;line-height:1;box-shadow:0 2px 6px rgba(0,0,0,.3);}
+    .bakeru-scroll-btn:hover{background:#334155;}
 </style>
   <script>
     window.addEventListener('error', function(e) {
@@ -61,7 +65,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
 /*
-  BAKERU 商品・在庫管理 v2.6.2
+  BAKERU 商品・在庫管理 v2.6.3
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -475,7 +479,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.2")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.3")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -486,42 +490,18 @@ function ConnectionBadge({ status }) {
 }
 function MenuScrollArea({ nav, activeTab, onSelect, mobile = false }) {
     const areaRef = useRef(null);
-    const [thumb, setThumb] = useState({ top: 0, height: 34 });
-    const updateThumb = useCallback(() => {
+    const scrollByMenu = (amount) => {
         const el = areaRef.current;
         if (!el) return;
-        const viewport = Math.max(1, el.clientHeight);
-        const total = Math.max(viewport, el.scrollHeight);
-        const ratio = viewport / total;
-        // 内容が全部収まる時も「スクロール領域がここ」と分かるようにバーを常時表示。
-        const height = ratio >= 0.999 ? 34 : Math.max(14, Math.min(88, ratio * 100));
-        const maxScroll = Math.max(1, total - viewport);
-        const maxTop = Math.max(0, 100 - height);
-        const top = ratio >= 0.999 ? 4 : Math.min(maxTop, (el.scrollTop / maxScroll) * maxTop);
-        setThumb({ top, height });
-    }, []);
-    useEffect(() => {
-        updateThumb();
-        const onResize = () => updateThumb();
-        window.addEventListener('resize', onResize);
-        const t = setTimeout(updateThumb, 50);
-        return () => { window.removeEventListener('resize', onResize); clearTimeout(t); };
-    }, [updateThumb, nav.length]);
-    const jumpFromRail = (e) => {
-        const el = areaRef.current;
-        if (!el) return;
-        const rect = e.currentTarget.getBoundingClientRect();
-        const p = Math.max(0, Math.min(1, (e.clientY - rect.top) / Math.max(1, rect.height)));
-        const max = Math.max(0, el.scrollHeight - el.clientHeight);
-        el.scrollTo({ top: max * p, behavior: 'smooth' });
+        el.scrollBy({ top: amount, behavior: 'smooth' });
     };
-    return React.createElement("div", { className: "bakeru-menu-scroll-wrap" },
-        React.createElement("nav", { ref: areaRef, onScroll: updateThumb, className: `bakeru-menu-scroll-nav p-4 space-y-1 ${mobile ? 'pt-3' : ''}` },
+    return React.createElement("div", { className: `bakeru-menu-scroll-wrap ${mobile ? 'bakeru-menu-mobile' : 'bakeru-menu-desktop'}` },
+        React.createElement("nav", { ref: areaRef, className: `bakeru-menu-scroll-nav p-4 space-y-1 ${mobile ? 'pt-3' : ''}`, "aria-label": "BAKERUメニュー" },
             nav.map(([id, label, Icon]) => React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => onSelect(id) })),
-            React.createElement("div", { className: "h-8", "aria-hidden": "true" })),
-        React.createElement("div", { className: "bakeru-menu-rail", onClick: jumpFromRail, title: "メニューを上下にスクロール" },
-            React.createElement("div", { className: "bakeru-menu-thumb", style: { top: `${thumb.top}%`, height: `${thumb.height}%` } })),
-        React.createElement("div", { className: "bakeru-menu-scroll-hint", "aria-hidden": "true" }, "SCROLL"));
+            React.createElement("div", { className: "h-6", "aria-hidden": "true" })),
+        !mobile && React.createElement("div", { className: "bakeru-scroll-controls", "aria-label": "メニュースクロール操作" },
+            React.createElement("button", { type: "button", className: "bakeru-scroll-btn", onClick: () => scrollByMenu(-150), title: "メニューを上へ" }, "▲"),
+            React.createElement("button", { type: "button", className: "bakeru-scroll-btn", onClick: () => scrollByMenu(150), title: "メニューを下へ" }, "▼")));
 }
 function NavItem({ icon, label, active, onClick }) {
     return React.createElement("button", { onClick: onClick, className: `w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${active ? 'bg-blue-600 text-white font-bold shadow' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}` },
