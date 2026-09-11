@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.6.1</title>
-  <!-- BAKERU_BUILD: 2.6.1-sidebar-verified -->
+  <title>BAKERU 商品・在庫管理 v2.6.2</title>
+  <!-- BAKERU_BUILD: 2.6.2-persistent-scrollbar -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -22,6 +22,15 @@
     .bakeru-sidebar-scroll::-webkit-scrollbar{width:8px;}
     .bakeru-sidebar-scroll::-webkit-scrollbar-track{background:#030712;}
     .bakeru-sidebar-scroll::-webkit-scrollbar-thumb{background:#64748b;border-radius:999px;border:2px solid #030712;}
+
+    /* v2.6.2: 左メニューに常時見える専用スクロールレール */
+    .bakeru-menu-scroll-wrap{position:relative;flex:1;min-height:0;overflow:hidden;}
+    .bakeru-menu-scroll-nav{height:100%;overflow-y:auto!important;overscroll-behavior:contain;padding-right:28px!important;scrollbar-width:none;}
+    .bakeru-menu-scroll-nav::-webkit-scrollbar{width:0;height:0;}
+    .bakeru-menu-rail{position:absolute;right:7px;top:12px;bottom:12px;width:10px;border-radius:999px;background:#111827;border:1px solid #334155;box-shadow:inset 0 0 0 1px rgba(255,255,255,.03);cursor:pointer;z-index:5;}
+    .bakeru-menu-thumb{position:absolute;left:2px;right:2px;min-height:54px;border-radius:999px;background:#94a3b8;box-shadow:0 1px 4px rgba(0,0,0,.35);transition:top .08s linear,height .08s linear;}
+    .bakeru-menu-rail:hover .bakeru-menu-thumb{background:#cbd5e1;}
+    .bakeru-menu-scroll-hint{position:absolute;right:3px;bottom:3px;font-size:9px;color:#94a3b8;writing-mode:vertical-rl;letter-spacing:.08em;pointer-events:none;opacity:.9;}
 </style>
   <script>
     window.addEventListener('error', function(e) {
@@ -52,7 +61,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
 /*
-  BAKERU 商品・在庫管理 v2.6.1
+  BAKERU 商品・在庫管理 v2.6.2
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -422,7 +431,7 @@ function App() {
     return (React.createElement("div", { className: "min-h-screen bg-gray-50 text-gray-900 font-sans md:flex" },
         React.createElement("aside", { className: "hidden md:flex w-64 bg-gray-950 text-white h-screen flex-col fixed inset-y-0 left-0 z-30 overflow-hidden" },
             React.createElement(Brand, null),
-            React.createElement("nav", { className: "flex-1 min-h-0 p-4 space-y-1 overflow-y-scroll overscroll-contain bakeru-sidebar-scroll" }, nav.map(([id, label, Icon]) => (React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => setActiveTab(id) })))),
+            React.createElement(MenuScrollArea, { nav: nav, activeTab: activeTab, onSelect: (id) => setActiveTab(id), mobile: false }),
             React.createElement("div", { className: "flex-none p-4 border-t border-gray-800 text-xs bg-gray-950" },
                 React.createElement(ConnectionBadge, { status: connection }))),
         mobileMenuOpen && (React.createElement("div", { className: "md:hidden fixed inset-0 z-50 bg-black/50", onClick: () => setMobileMenuOpen(false) },
@@ -431,7 +440,7 @@ function App() {
                     React.createElement(Brand, null),
                     React.createElement("button", { onClick: () => setMobileMenuOpen(false) },
                         React.createElement(X, null))),
-                React.createElement("nav", { className: "flex-1 min-h-0 p-4 space-y-1 overflow-y-scroll overscroll-contain bakeru-sidebar-scroll" }, nav.map(([id, label, Icon]) => (React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => { setActiveTab(id); setMobileMenuOpen(false); } }))))))),
+                React.createElement(MenuScrollArea, { nav: nav, activeTab: activeTab, onSelect: (id) => { setActiveTab(id); setMobileMenuOpen(false); }, mobile: true })))),
         React.createElement("main", { className: "flex-1 md:ml-64 min-w-0 pb-24 md:pb-0" },
             React.createElement("header", { className: "sticky top-0 z-20 bg-white border-b-2 border-gray-200 h-16 flex items-center justify-between px-4 md:px-7" },
                 React.createElement("div", { className: "flex items-center gap-3 min-w-0" },
@@ -461,12 +470,12 @@ function App() {
             React.createElement("span", null, label))))));
 }
 function Brand() {
-    return React.createElement("div", { className: "p-5 border-b border-gray-800 flex items-center gap-3 min-h-20" },
+    return React.createElement("div", { className: "flex-none p-5 border-b border-gray-800 flex items-center gap-3 min-h-20 bg-gray-950" },
         React.createElement("div", { className: "w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center" },
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.0")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.2")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -474,6 +483,45 @@ function ConnectionBadge({ status }) {
         on ? React.createElement(Wifi, { size: 13 }) : React.createElement(WifiOff, { size: 13 }),
         " ",
         on ? 'Sheet接続中' : 'Sheet未接続');
+}
+function MenuScrollArea({ nav, activeTab, onSelect, mobile = false }) {
+    const areaRef = useRef(null);
+    const [thumb, setThumb] = useState({ top: 0, height: 34 });
+    const updateThumb = useCallback(() => {
+        const el = areaRef.current;
+        if (!el) return;
+        const viewport = Math.max(1, el.clientHeight);
+        const total = Math.max(viewport, el.scrollHeight);
+        const ratio = viewport / total;
+        // 内容が全部収まる時も「スクロール領域がここ」と分かるようにバーを常時表示。
+        const height = ratio >= 0.999 ? 34 : Math.max(14, Math.min(88, ratio * 100));
+        const maxScroll = Math.max(1, total - viewport);
+        const maxTop = Math.max(0, 100 - height);
+        const top = ratio >= 0.999 ? 4 : Math.min(maxTop, (el.scrollTop / maxScroll) * maxTop);
+        setThumb({ top, height });
+    }, []);
+    useEffect(() => {
+        updateThumb();
+        const onResize = () => updateThumb();
+        window.addEventListener('resize', onResize);
+        const t = setTimeout(updateThumb, 50);
+        return () => { window.removeEventListener('resize', onResize); clearTimeout(t); };
+    }, [updateThumb, nav.length]);
+    const jumpFromRail = (e) => {
+        const el = areaRef.current;
+        if (!el) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const p = Math.max(0, Math.min(1, (e.clientY - rect.top) / Math.max(1, rect.height)));
+        const max = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTo({ top: max * p, behavior: 'smooth' });
+    };
+    return React.createElement("div", { className: "bakeru-menu-scroll-wrap" },
+        React.createElement("nav", { ref: areaRef, onScroll: updateThumb, className: `bakeru-menu-scroll-nav p-4 space-y-1 ${mobile ? 'pt-3' : ''}` },
+            nav.map(([id, label, Icon]) => React.createElement(NavItem, { key: id, icon: React.createElement(Icon, { size: 20 }), label: label, active: activeTab === id, onClick: () => onSelect(id) })),
+            React.createElement("div", { className: "h-8", "aria-hidden": "true" })),
+        React.createElement("div", { className: "bakeru-menu-rail", onClick: jumpFromRail, title: "メニューを上下にスクロール" },
+            React.createElement("div", { className: "bakeru-menu-thumb", style: { top: `${thumb.top}%`, height: `${thumb.height}%` } })),
+        React.createElement("div", { className: "bakeru-menu-scroll-hint", "aria-hidden": "true" }, "SCROLL"));
 }
 function NavItem({ icon, label, active, onClick }) {
     return React.createElement("button", { onClick: onClick, className: `w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${active ? 'bg-blue-600 text-white font-bold shadow' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}` },
