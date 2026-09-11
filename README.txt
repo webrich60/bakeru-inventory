@@ -1,20 +1,10 @@
-BAKERU 商品・在庫管理 v2.5.2 GitHub Pages修正版
+BAKERU 商品・在庫管理 v2.5.3 GitHub Pages runtime fix
 
-【今回の修正】
-- index.html がReactソースのまま表示される問題を修正
-- GitHub Pagesで開ける完全なHTMLに変更
-- React / Tailwind / Font Awesome はCDNから読み込み
-- Code.gs はGAS側で使用（GitHub上ではバックアップ）
-- noindex設定を維持
+GitHubにこのフォルダー内のファイルを上書きアップロードしてください。
+主な修正:
+- ブラウザ内Babel変換を廃止し、JavaScriptを事前コンパイル
+- React/ReactDOMをjsDelivrから読み込み
+- 起動失敗時に真っ白にならずエラー案内を表示
+- noindex設定維持
 
-【GitHubへアップするファイル】
-index.html
-Code.gs
-robots.txt
-.nojekyll
-README.txt
-SECURITY_NOTE.txt
-
-【重要】
-GitHub PagesのSourceは Deploy from a branch / main / /(root) を指定してください。
-公開後、https://webrich60.github.io/bakeru-inventory/ を開いて確認します。
+Code.gs はGAS側のバックアップです。GitHub Pages上では実行されません。
