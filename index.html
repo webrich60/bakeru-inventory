@@ -1,11 +1,52 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  LayoutDashboard, Package, ShoppingCart, Scan, BrainCircuit, Bell,
-  Settings, Plus, AlertTriangle, CheckCircle2, Search, Upload, Camera,
-  RefreshCw, Download, Database, Wifi, WifiOff, ClipboardCheck,
-  Barcode, Save, FileSpreadsheet, Link2, Menu, X, Trash2, RotateCcw,
-  Check, Minus, PlusCircle, Cloud, CloudOff
-} from 'lucide-react';
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
+  <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
+  <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
+  <meta name="theme-color" content="#111827" />
+  <title>BAKERU 商品・在庫管理</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html,body,#root{min-height:100%;margin:0}
+    body{background:#f9fafb;color:#111827}
+    *{box-sizing:border-box}
+    button,input,select,textarea{font:inherit}
+  </style>
+</head>
+<body>
+  <noscript>BAKERUを利用するにはJavaScriptを有効にしてください。</noscript>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="env,react">
+
+const { useCallback, useEffect, useMemo, useRef, useState } = React;
+
+const ICON_MAP = {
+  LayoutDashboard:'table-columns', Package:'box', ShoppingCart:'cart-shopping', Scan:'qrcode',
+  BrainCircuit:'brain', Bell:'bell', Settings:'gear', Plus:'plus', AlertTriangle:'triangle-exclamation',
+  CheckCircle2:'circle-check', Search:'magnifying-glass', Upload:'upload', Camera:'camera',
+  RefreshCw:'rotate', Download:'download', Database:'database', Wifi:'wifi', WifiOff:'ban',
+  ClipboardCheck:'clipboard-check', Barcode:'barcode', Save:'floppy-disk', FileSpreadsheet:'table',
+  Link2:'link', Menu:'bars', X:'xmark', Trash2:'trash', RotateCcw:'rotate-left', Check:'check',
+  Minus:'minus', PlusCircle:'circle-plus', Cloud:'cloud', CloudOff:'cloud'
+};
+const makeIcon = (name) => ({ size=24, className='', style={}, ...props }) => (
+  <i aria-hidden="true" className={`fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`}
+     style={{ fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign:'center', ...style }} {...props}></i>
+);
+const LayoutDashboard=makeIcon('LayoutDashboard'), Package=makeIcon('Package'), ShoppingCart=makeIcon('ShoppingCart'), Scan=makeIcon('Scan'),
+BrainCircuit=makeIcon('BrainCircuit'), Bell=makeIcon('Bell'), Settings=makeIcon('Settings'), Plus=makeIcon('Plus'), AlertTriangle=makeIcon('AlertTriangle'),
+CheckCircle2=makeIcon('CheckCircle2'), Search=makeIcon('Search'), Upload=makeIcon('Upload'), Camera=makeIcon('Camera'), RefreshCw=makeIcon('RefreshCw'),
+Download=makeIcon('Download'), Database=makeIcon('Database'), Wifi=makeIcon('Wifi'), WifiOff=makeIcon('WifiOff'), ClipboardCheck=makeIcon('ClipboardCheck'),
+Barcode=makeIcon('Barcode'), Save=makeIcon('Save'), FileSpreadsheet=makeIcon('FileSpreadsheet'), Link2=makeIcon('Link2'), Menu=makeIcon('Menu'), X=makeIcon('X'),
+Trash2=makeIcon('Trash2'), RotateCcw=makeIcon('RotateCcw'), Check=makeIcon('Check'), Minus=makeIcon('Minus'), PlusCircle=makeIcon('PlusCircle'),
+Cloud=makeIcon('Cloud'), CloudOff=makeIcon('CloudOff');
 
 /*
   BAKERU 商品・在庫管理 v2.5
@@ -135,7 +176,7 @@ function toast(message, tone = 'ok') {
   setTimeout(() => el.remove(), 3500);
 }
 
-export default function App() {
+function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [inventory, setInventory] = useState(() => readJson(LS.inventory, []));
   const [transactions, setTransactions] = useState(() => readJson(LS.transactions, []));
@@ -833,3 +874,12 @@ if (typeof document !== 'undefined' && !document.getElementById('bakeru-v23-styl
     @media(max-width:767px){button,.input,select{font-size:16px} body{overscroll-behavior-y:contain}}
   `;document.head.appendChild(style);
 }
+
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+
+  </script>
+</body>
+</html>
