@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.6.3</title>
-  <!-- BAKERU_BUILD: 2.6.3-real-scroll -->
+  <title>BAKERU 商品・在庫管理 v2.6.4</title>
+  <!-- BAKERU_BUILD: 2.6.4-unit-conversion -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -23,7 +23,7 @@
     .bakeru-sidebar-scroll::-webkit-scrollbar-track{background:#030712;}
     .bakeru-sidebar-scroll::-webkit-scrollbar-thumb{background:#64748b;border-radius:999px;border:2px solid #030712;}
 
-    /* v2.6.3: PCは実際にスクロール量が生まれる高さに制限。ネイティブ縦スクロールを使用 */
+    /* v2.6.4: PCは実際にスクロール量が生まれる高さに制限。ネイティブ縦スクロールを使用 */
     .bakeru-menu-scroll-wrap{position:relative;min-height:0;overflow:hidden;}
     .bakeru-menu-scroll-wrap.bakeru-menu-desktop{flex:0 0 min(340px,calc(100vh - 190px));height:min(340px,calc(100vh - 190px));min-height:240px;border-bottom:1px solid #1f2937;}
     .bakeru-menu-scroll-wrap.bakeru-menu-mobile{flex:1;min-height:0;}
@@ -65,7 +65,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
 /*
-  BAKERU 商品・在庫管理 v2.6.3
+  BAKERU 商品・在庫管理 v2.6.4
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -180,13 +180,28 @@ const stockStage = (x) => {
         return 'warning';
     return 'ok';
 };
+const compatibleUnitChoices = (product) => {
+    if (!product) return [];
+    const baseUnit = String(product.unit || '個');
+    const purchaseUnit = String(product.purchaseUnit || baseUnit);
+    const group = baseUnit === 'g' || baseUnit === 'kg'
+        ? ['g', 'kg']
+        : baseUnit === 'ml' || baseUnit === 'L'
+            ? ['ml', 'L']
+            : [baseUnit];
+    return Array.from(new Set([...group, purchaseUnit].filter(Boolean)));
+};
 const movementFactor = (product, inputUnit) => {
     const baseUnit = String((product === null || product === void 0 ? void 0 : product.unit) || '個');
     const purchaseUnit = String((product === null || product === void 0 ? void 0 : product.purchaseUnit) || baseUnit);
-    if (inputUnit === baseUnit)
-        return 1;
-    if (inputUnit === purchaseUnit)
+    const unit = String(inputUnit || baseUnit);
+    if (unit === baseUnit) return 1;
+    if (unit === purchaseUnit)
         return Math.max(0.000001, Number((product === null || product === void 0 ? void 0 : product.purchaseFactor) || 1));
+    if (baseUnit === 'g' && unit === 'kg') return 1000;
+    if (baseUnit === 'kg' && unit === 'g') return 0.001;
+    if (baseUnit === 'ml' && unit === 'L') return 1000;
+    if (baseUnit === 'L' && unit === 'ml') return 0.001;
     return 1;
 };
 const parseGasResponse = async (response) => {
@@ -479,7 +494,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.3")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.4")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -716,7 +731,7 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
         setInputUnit(product.unit || '個'); }, [productId]);
     const factor = product ? movementFactor(product, inputUnit || product.unit) : 1;
     const baseQty = product ? Math.round(Number(qty || 0) * factor * 1000) / 1000 : 0;
-    const unitChoices = product ? Array.from(new Set([product.unit || '個', product.purchaseUnit || product.unit || '個'])) : [];
+    const unitChoices = compatibleUnitChoices(product);
     const submit = async () => {
         try {
             await recordMovement({ productId, type, quantity: qty, inputUnit: inputUnit || (product === null || product === void 0 ? void 0 : product.unit), source: '手入力', note });
@@ -761,7 +776,7 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
                     " ",
                     product.unit || '個'),
                 React.createElement(Field, { label: type === 'out' ? '出庫単位' : '入庫単位' },
-                    React.createElement("div", { className: "grid grid-cols-2 gap-2" }, unitChoices.map(u => React.createElement("button", { key: u, onClick: () => setInputUnit(u), className: `py-2.5 rounded-xl border-2 font-bold ${inputUnit === u ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300'}` }, u)))),
+                    product ? React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-3 gap-2" }, unitChoices.map(u => React.createElement("button", { key: u, onClick: () => setInputUnit(u), className: `py-2.5 rounded-xl border-2 font-bold ${inputUnit === u ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300'}` }, u))) : React.createElement("div", { className: "p-3 rounded-xl bg-gray-50 border-2 border-dashed border-gray-300 text-sm text-gray-500 font-bold" }, "商品を選択すると g・kg・ml・L・個・袋・箱など、商品に合う単位を選べます。")),
                 React.createElement(Field, { label: "\u6570\u91CF" },
                     React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: qty, onChange: e => setQty(Number(e.target.value)), className: "input text-lg font-black" })),
                 React.createElement("div", { className: "grid grid-cols-4 gap-2" }, [1, 5, 10, 20].map(n => React.createElement("button", { key: n, onClick: () => setQty(n), className: "py-2 rounded-lg bg-gray-100 font-bold" }, n))),
@@ -910,7 +925,7 @@ function QuickMovement({ product, recordMovement }) {
     const [unit, setUnit] = useState(product.unit || '個');
     const [qty, setQty] = useState(1);
     useEffect(() => { setUnit(product.unit || '個'); setQty(1); }, [product.id]);
-    const choices = Array.from(new Set([product.unit || '個', product.purchaseUnit || product.unit || '個']));
+    const choices = compatibleUnitChoices(product);
     const baseQty = Math.round(Number(qty || 0) * movementFactor(product, unit) * 1000) / 1000;
     const save = async () => { try {
         await recordMovement({ productId: product.id, type, quantity: qty, inputUnit: unit, source: '商品バーコード' });
