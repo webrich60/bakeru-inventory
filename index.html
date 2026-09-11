@@ -1,0 +1,835 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  LayoutDashboard, Package, ShoppingCart, Scan, BrainCircuit, Bell,
+  Settings, Plus, AlertTriangle, CheckCircle2, Search, Upload, Camera,
+  RefreshCw, Download, Database, Wifi, WifiOff, ClipboardCheck,
+  Barcode, Save, FileSpreadsheet, Link2, Menu, X, Trash2, RotateCcw,
+  Check, Minus, PlusCircle, Cloud, CloudOff
+} from 'lucide-react';
+
+/*
+  BAKERU 商品・在庫管理 v2.5
+  - Google Apps Script + Google Sheets を正本データとして使用
+  - Gemini API キーはフロントに置かず、GAS Script Properties に保存
+  - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
+  - GAS未接続時はLocalStorageに一時保存し、再接続後に同期可能
+*/
+
+const LS = {
+  inventory: 'bakeru_inventory_v2',
+  transactions: 'bakeru_transactions_v2',
+  alerts: 'bakeru_alerts_v2',
+  gasUrl: 'bakeru_gas_url_v2',
+  syncToken: 'bakeru_sync_token_v2',
+  queue: 'bakeru_sync_queue_v2',
+  productScanHistory: 'bakeru_product_scan_history_v2',
+  mode: 'bakeru_mode_v24'
+};
+
+const MODE_STORAGE = {
+  prod: { inventory: LS.inventory, transactions: LS.transactions, alerts: LS.alerts, queue: LS.queue, productScanHistory: LS.productScanHistory },
+  test: { inventory: 'bakeru_test_inventory_v24', transactions: 'bakeru_test_transactions_v24', alerts: 'bakeru_test_alerts_v24', queue: 'bakeru_test_sync_queue_v24', productScanHistory: 'bakeru_test_product_scan_history_v24' }
+};
+
+const TEST_PRODUCTS = [
+  {id:'test_matcha',sku:'TEST-001',barcode:'4900000000017',name:'テスト抹茶パウダー',category:'茶葉・原料',unit:'g',purchaseUnit:'袋',purchaseFactor:1000,stock:1200,warningStock:500,minStock:250,cost:2800,price:0,notifyEmail:'',aliases:'抹茶'},
+  {id:'test_hojicha',sku:'TEST-002',barcode:'4900000000024',name:'テストほうじ茶パウダー',category:'茶葉・原料',unit:'g',purchaseUnit:'袋',purchaseFactor:500,stock:520,warningStock:250,minStock:100,cost:1800,price:0,notifyEmail:'',aliases:'ほうじ茶'},
+  {id:'test_cup',sku:'TEST-003',barcode:'4900000000031',name:'テストテイクアウトカップ',category:'資材',unit:'個',purchaseUnit:'ケース',purchaseFactor:50,stock:38,warningStock:30,minStock:15,cost:18,price:0,notifyEmail:'',aliases:'カップ'},
+  {id:'test_kuromitsu',sku:'TEST-004',barcode:'4900000000048',name:'テスト黒蜜',category:'原料',unit:'ml',purchaseUnit:'本',purchaseFactor:1000,stock:180,warningStock:300,minStock:150,cost:780,price:0,notifyEmail:'',aliases:'黒蜜'}
+];
+
+const readJson = (key, fallback) => {
+  try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
+  catch { return fallback; }
+};
+
+const uid = (prefix = 'id') => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+const yen = (v) => `¥${Number(v || 0).toLocaleString('ja-JP')}`;
+
+const normalizeText = (s = '') => String(s)
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/[\s　()（）・\-_/]/g, '');
+
+const UNIT_OPTIONS = ['個','g','kg','ml','L','本','枚','袋','箱','ケース'];
+
+const getCriticalStock = (x) => Number(x?.minStock ?? 0);
+const getWarningStock = (x) => {
+  const critical = getCriticalStock(x);
+  const configured = Number(x?.warningStock);
+  return Number.isFinite(configured) && configured > critical ? configured : Math.max(critical * 2, critical + 1);
+};
+const stockStage = (x) => {
+  const stock = Number(x?.stock || 0);
+  const critical = getCriticalStock(x);
+  const warning = getWarningStock(x);
+  if (stock <= critical) return 'critical';
+  if (stock <= warning) return 'warning';
+  return 'ok';
+};
+const movementFactor = (product, inputUnit) => {
+  const baseUnit = String(product?.unit || '個');
+  const purchaseUnit = String(product?.purchaseUnit || baseUnit);
+  if (inputUnit === baseUnit) return 1;
+  if (inputUnit === purchaseUnit) return Math.max(0.000001, Number(product?.purchaseFactor || 1));
+  return 1;
+};
+
+const parseGasResponse = async (response) => {
+  const text = await response.text();
+  try { return JSON.parse(text); }
+  catch {
+    throw new Error(`GAS応答をJSONとして解析できませんでした: ${text.slice(0, 160)}`);
+  }
+};
+
+async function gasRequest(gasUrl, syncToken, action, payload = {}, mode = 'prod') {
+  if (!gasUrl) throw new Error('GAS WebアプリURLが未設定です。');
+  const body = {
+    action,
+    token: syncToken || '',
+    mode,
+    payload
+  };
+  const response = await fetch(gasUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+    redirect: 'follow'
+  });
+  if (!response.ok) throw new Error(`通信エラー: HTTP ${response.status}`);
+  const data = await parseGasResponse(response);
+  if (!data.ok) throw new Error(data.error || 'GAS処理に失敗しました。');
+  return data;
+}
+
+async function compressImageFile(file, maxSize = 1600, quality = 0.82) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = reject;
+    i.src = dataUrl;
+  });
+  const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+function toast(message, tone = 'ok') {
+  const el = document.createElement('div');
+  const cls = tone === 'error' ? 'bg-red-600' : tone === 'warn' ? 'bg-amber-600' : 'bg-emerald-600';
+  el.className = `fixed bottom-24 md:bottom-5 right-4 left-4 md:left-auto ${cls} text-white px-5 py-3 rounded-xl shadow-xl z-[100] font-bold text-sm`;
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [inventory, setInventory] = useState(() => readJson(LS.inventory, []));
+  const [transactions, setTransactions] = useState(() => readJson(LS.transactions, []));
+  const [alerts, setAlerts] = useState(() => readJson(LS.alerts, []));
+  const [gasUrl, setGasUrl] = useState(() => localStorage.getItem(LS.gasUrl) || '');
+  const [syncToken, setSyncToken] = useState(() => localStorage.getItem(LS.syncToken) || '');
+  const [connection, setConnection] = useState('offline');
+  const [syncing, setSyncing] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => localStorage.setItem(LS.inventory, JSON.stringify(inventory)), [inventory]);
+  useEffect(() => localStorage.setItem(LS.transactions, JSON.stringify(transactions)), [transactions]);
+  useEffect(() => localStorage.setItem(LS.alerts, JSON.stringify(alerts)), [alerts]);
+  useEffect(() => localStorage.setItem(LS.gasUrl, gasUrl), [gasUrl]);
+  useEffect(() => localStorage.setItem(LS.syncToken, syncToken), [syncToken]);
+
+  const applyBootstrap = useCallback((data) => {
+    if (Array.isArray(data.inventory)) setInventory(data.inventory);
+    if (Array.isArray(data.transactions)) setTransactions(data.transactions);
+    if (Array.isArray(data.alerts)) setAlerts(data.alerts);
+  }, []);
+
+  const api = useCallback(async (action, payload = {}, options = {}) => {
+    try {
+      const result = await gasRequest(gasUrl, syncToken, action, payload);
+      setConnection('online');
+      return result;
+    } catch (err) {
+      setConnection('offline');
+      if (options.queueOnFail) {
+        const queue = readJson(LS.queue, []);
+        queue.push({ id: uid('q'), action, payload, queuedAt: Date.now() });
+        localStorage.setItem(LS.queue, JSON.stringify(queue.slice(-500)));
+        toast('通信できないため端末に一時保存しました。', 'warn');
+      }
+      throw err;
+    }
+  }, [gasUrl, syncToken]);
+
+  const pullFromSheet = useCallback(async (silent = false) => {
+    if (!gasUrl || !syncToken) return;
+    setSyncing(true);
+    try {
+      const result = await api('bootstrap');
+      applyBootstrap(result.data || {});
+      if (!silent) toast('スプレッドシートと同期しました。');
+    } catch (err) {
+      if (!silent) toast(err.message, 'error');
+    } finally {
+      setSyncing(false);
+    }
+  }, [api, applyBootstrap, gasUrl, syncToken]);
+
+  const flushQueue = useCallback(async () => {
+    const queue = readJson(LS.queue, []);
+    if (!queue.length || !gasUrl || !syncToken) return;
+    const remaining = [];
+    for (const item of queue) {
+      try { await gasRequest(gasUrl, syncToken, item.action, item.payload); }
+      catch { remaining.push(item); }
+    }
+    localStorage.setItem(LS.queue, JSON.stringify(remaining));
+    if (remaining.length === 0) await pullFromSheet(true);
+  }, [gasUrl, syncToken, pullFromSheet]);
+
+  useEffect(() => {
+    if (gasUrl && syncToken) {
+      pullFromSheet(true).then(flushQueue);
+    }
+  }, []); // 初回のみ
+
+  const saveProduct = async (product) => {
+    const local = { ...product, id: product.id || uid('prod'), updatedAt: Date.now() };
+    setInventory(prev => {
+      const idx = prev.findIndex(x => x.id === local.id);
+      return idx >= 0 ? prev.map(x => x.id === local.id ? local : x) : [...prev, local];
+    });
+    try {
+      const result = await api('upsertProduct', local, { queueOnFail: true });
+      if (result.data?.product) {
+        setInventory(prev => prev.map(x => x.id === local.id ? result.data.product : x));
+      }
+    } catch { /* queued */ }
+    return local;
+  };
+
+  const deleteProduct = async (id) => {
+    setInventory(prev => prev.filter(x => x.id !== id));
+    try { await api('deleteProduct', { id }, { queueOnFail: true }); }
+    catch { /* queued */ }
+  };
+
+  const recordMovement = async ({ productId, type, quantity, inputUnit, unitPrice = 0, source = '手入力', note = '' }) => {
+    const product = inventory.find(x => x.id === productId);
+    if (!product) throw new Error('商品が見つかりません。');
+    const qty = Number(quantity || 0);
+    if (qty <= 0) throw new Error('数量は0より大きい値で入力してください。');
+    const useUnit = inputUnit || product.unit || '個';
+    const factor = movementFactor(product, useUnit);
+    const baseQty = Math.round(qty * factor * 1000) / 1000;
+    const delta = type === 'out' ? -baseQty : baseQty;
+    if ((Number(product.stock || 0) + delta) < -0.000001 && type === 'out') throw new Error(`在庫を超えて出庫できません。現在庫 ${product.stock} ${product.unit || '個'}`);
+
+    const tx = {
+      id: uid('tx'), productId, productName: product.name, barcode: product.barcode || '',
+      type, quantity: baseQty, inputQuantity: qty, inputUnit: useUnit, conversionFactor: factor, baseUnit: product.unit || '個',
+      unitPrice: Number(unitPrice || 0), source, note, timestamp: Date.now()
+    };
+    setTransactions(prev => [tx, ...prev]);
+    setInventory(prev => prev.map(x => x.id === productId ? { ...x, stock: Math.round((Number(x.stock || 0) + delta) * 1000) / 1000, updatedAt: Date.now() } : x));
+
+    try {
+      const result = await api('recordMovement', tx, { queueOnFail: true });
+      if (result.data?.inventory) setInventory(result.data.inventory);
+      if (result.data?.alerts) setAlerts(result.data.alerts);
+    } catch { /* queued */ }
+    return tx;
+  };
+
+  const nav = [
+    ['dashboard', 'ダッシュボード', LayoutDashboard],
+    ['scan', 'スキャン・検品', Scan],
+    ['inventory', '商品・在庫', Package],
+    ['transactions', '入出庫', ShoppingCart],
+    ['stocktake', '棚卸', ClipboardCheck],
+    ['analysis', 'AI分析', BrainCircuit],
+    ['settings', '設定・連携', Settings]
+  ];
+
+  const pageTitle = nav.find(n => n[0] === activeTab)?.[1] || 'BAKERU';
+  const commonProps = { inventory, setInventory, transactions, setTransactions, alerts, setAlerts, api, saveProduct, recordMovement, pullFromSheet };
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans md:flex">
+      <aside className="hidden md:flex w-64 bg-gray-950 text-white min-h-screen flex-col fixed inset-y-0 left-0 z-30">
+        <Brand />
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {nav.map(([id, label, Icon]) => (
+            <NavItem key={id} icon={<Icon size={20}/>} label={label} active={activeTab === id} onClick={() => setActiveTab(id)} />
+          ))}
+        </nav>
+        <div className="p-4 border-t border-gray-800 text-xs">
+          <ConnectionBadge status={connection} />
+        </div>
+      </aside>
+
+      {mobileMenuOpen && (
+        <div className="md:hidden fixed inset-0 z-50 bg-black/50" onClick={() => setMobileMenuOpen(false)}>
+          <div className="w-[82%] max-w-xs h-full bg-gray-950 text-white shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center pr-3"><Brand/><button onClick={() => setMobileMenuOpen(false)}><X/></button></div>
+            <nav className="p-4 space-y-1">
+              {nav.map(([id, label, Icon]) => (
+                <NavItem key={id} icon={<Icon size={20}/>} label={label} active={activeTab === id} onClick={() => { setActiveTab(id); setMobileMenuOpen(false); }} />
+              ))}
+            </nav>
+          </div>
+        </div>
+      )}
+
+      <main className="flex-1 md:ml-64 min-w-0 pb-24 md:pb-0">
+        <header className="sticky top-0 z-20 bg-white border-b-2 border-gray-200 h-16 flex items-center justify-between px-4 md:px-7">
+          <div className="flex items-center gap-3 min-w-0">
+            <button className="md:hidden p-2 rounded-lg border border-gray-300" onClick={() => setMobileMenuOpen(true)}><Menu size={20}/></button>
+            <h2 className="font-extrabold text-lg md:text-xl truncate">{pageTitle}</h2>
+          </div>
+          <div className="flex items-center gap-2 md:gap-4">
+            <button onClick={() => pullFromSheet(false)} disabled={syncing || !gasUrl} className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-40" title="同期">
+              <RefreshCw size={19} className={syncing ? 'animate-spin' : ''}/>
+            </button>
+            <div className="relative">
+              <Bell size={21} className={alerts.some(a => a.status !== '解決済み' && !a.resolved) ? 'text-red-600' : 'text-gray-500'}/>
+              {alerts.filter(a => a.status !== '解決済み' && !a.resolved).length > 0 && <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] min-w-5 h-5 px-1 flex items-center justify-center rounded-full font-bold">{alerts.filter(a => a.status !== '解決済み' && !a.resolved).length}</span>}
+            </div>
+            <div className="hidden sm:block"><ConnectionBadge status={connection}/></div>
+          </div>
+        </header>
+
+        <div className="p-4 md:p-7 max-w-[1500px] mx-auto">
+          {activeTab === 'dashboard' && <DashboardView {...commonProps}/>} 
+          {activeTab === 'scan' && <ScanInspectionView {...commonProps}/>} 
+          {activeTab === 'inventory' && <InventoryView {...commonProps} onDelete={deleteProduct}/>} 
+          {activeTab === 'transactions' && <TransactionsView {...commonProps}/>} 
+          {activeTab === 'stocktake' && <StocktakeView {...commonProps}/>} 
+          {activeTab === 'analysis' && <AnalysisView {...commonProps}/>} 
+          {activeTab === 'settings' && <SettingsView gasUrl={gasUrl} setGasUrl={setGasUrl} syncToken={syncToken} setSyncToken={setSyncToken} connection={connection} api={api} pullFromSheet={pullFromSheet} flushQueue={flushQueue} inventory={inventory}/>} 
+        </div>
+      </main>
+
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t-2 border-gray-200 grid grid-cols-5 shadow-[0_-3px_12px_rgba(0,0,0,.08)]">
+        {[
+          ['dashboard','ホーム',LayoutDashboard],['scan','スキャン',Scan],['inventory','在庫',Package],['stocktake','棚卸',ClipboardCheck],['settings','設定',Settings]
+        ].map(([id,label,Icon]) => <button key={id} onClick={() => setActiveTab(id)} className={`py-2.5 flex flex-col items-center gap-1 text-[11px] font-bold ${activeTab === id ? 'text-blue-700 bg-blue-50' : 'text-gray-600'}`}><Icon size={20}/><span>{label}</span></button>)}
+      </nav>
+    </div>
+  );
+}
+
+function Brand() {
+  return <div className="p-5 border-b border-gray-800 flex items-center gap-3 min-h-20">
+    <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center"><Package className="text-emerald-400"/></div>
+    <div><div className="text-xl font-black tracking-wider text-emerald-400">BAKERU</div><div className="text-xs text-gray-300">商品・在庫管理 v2.1</div></div>
+  </div>;
+}
+
+function ConnectionBadge({ status }) {
+  const on = status === 'online';
+  return <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-bold ${on ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'}`}>{on ? <Wifi size={13}/> : <WifiOff size={13}/>} {on ? 'Sheet接続中' : '端末保存'}</span>;
+}
+
+function NavItem({ icon, label, active, onClick }) {
+  return <button onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${active ? 'bg-blue-600 text-white font-bold shadow' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}`}>{icon}<span>{label}</span></button>;
+}
+
+function Card({ children, className = '' }) {
+  return <div className={`bg-white rounded-2xl border-2 border-gray-200 shadow-sm ${className}`}>{children}</div>;
+}
+
+function DashboardView({ inventory, transactions, alerts, api, setAlerts }) {
+  const totalStock = inventory.reduce((s, x) => s + Number(x.stock || 0), 0);
+  const stockValue = inventory.reduce((s, x) => s + Number(x.stock || 0) * Number(x.cost || 0), 0);
+  const low = inventory.filter(x => stockStage(x) !== 'ok');
+  const activeAlerts = alerts.filter(a => a.status !== '解決済み' && !a.resolved);
+  const discrepancies = activeAlerts.filter(a => String(a.type || '').includes('差異') || String(a.type || '').includes('棚卸'));
+
+  return <div className="space-y-5">
+    <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-5">
+      <Stat title="登録商品" value={`${inventory.length} 品`} icon={<Package className="text-blue-600"/>}/>
+      <Stat title="総在庫数" value={`${totalStock.toLocaleString()} 点`} icon={<ShoppingCart className="text-emerald-600"/>}/>
+      <Stat title="在庫原価" value={yen(stockValue)} icon={<Database className="text-violet-600"/>}/>
+      <Stat title="要確認" value={`${activeAlerts.length} 件`} icon={<AlertTriangle className={activeAlerts.length ? 'text-red-600' : 'text-gray-400'}/>} warn={activeAlerts.length > 0}/>
+    </div>
+
+    <div className="grid lg:grid-cols-2 gap-5">
+      <Card className="p-5">
+        <h3 className="font-extrabold text-lg flex items-center gap-2 mb-4"><AlertTriangle size={20} className="text-red-600"/>差異・アラート</h3>
+        {activeAlerts.length === 0 ? <Empty text="現在、確認が必要な差異はありません。"/> : <div className="space-y-3">
+          {activeAlerts.slice(0, 8).map(a => { const critical = a.severity === '重要' || String(a.type||'').includes('レッド'); return <div key={a.id || a.alertId} className={`p-3 rounded-xl border ${critical ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-300'}`}>
+            <div className={`font-bold ${critical ? 'text-red-900' : 'text-amber-900'}`}>{critical ? '🔴 ' : '🟡 '}{a.productName || a.type || '差異'}</div>
+            <div className={`text-sm mt-1 ${critical ? 'text-red-800' : 'text-amber-800'}`}>{a.message || a.detail || `差異: ${a.difference ?? ''}`}</div>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mt-2"><div className={`text-xs ${critical ? 'text-red-600' : 'text-amber-700'}`}>{a.timestamp ? new Date(a.timestamp).toLocaleString('ja-JP') : a.createdAt || ''}</div><button onClick={async()=>{const id=a.id||a.alertId;setAlerts(prev=>prev.map(x=>(x.id||x.alertId)===id?{...x,status:'解決済み'}:x));try{const r=await api('resolveAlert',{id},{queueOnFail:true});if(r.data?.alerts)setAlerts(r.data.alerts);toast('アラートを確認済みにしました。');}catch{}}} className={`px-3 py-1.5 rounded-lg bg-white text-xs font-bold ${critical ? 'border border-red-300 text-red-800' : 'border border-amber-300 text-amber-800'}`}>確認済みにする</button></div>
+          </div>})}
+        </div>}
+      </Card>
+
+      <Card className="p-5">
+        <h3 className="font-extrabold text-lg flex items-center gap-2 mb-4"><Package size={20} className="text-amber-600"/>発注候補</h3>
+        {low.length === 0 ? <Empty text="注意ラインを下回る商品はありません。"/> : <div className="space-y-3">
+          {low.slice(0, 10).map(x => { const stage=stockStage(x); return <div key={x.id} className={`flex justify-between items-center p-3 rounded-xl border ${stage==='critical'?'bg-red-50 border-red-300':'bg-amber-50 border-amber-200'}`}>
+            <div><div className="font-bold">{stage==='critical'?'🔴':'🟡'} {x.name}</div><div className="text-xs text-gray-600">{x.barcode || 'バーコード未登録'}</div></div>
+            <div className="text-right"><div className={`text-xl font-black ${stage==='critical'?'text-red-700':'text-amber-700'}`}>{x.stock} {x.unit||'個'}</div><div className="text-xs">注意 {getWarningStock(x)} / レッド {getCriticalStock(x)}</div></div>
+          </div>})}
+        </div>}
+      </Card>
+    </div>
+
+    <Card className="p-5">
+      <h3 className="font-extrabold text-lg mb-4">直近の入出庫</h3>
+      <div className="space-y-2">
+        {transactions.slice(0, 8).map(t => <div key={t.id} className="grid grid-cols-[1fr_auto] md:grid-cols-[160px_100px_1fr_100px] gap-2 items-center border-b border-gray-100 py-2 text-sm">
+          <span className="hidden md:block text-gray-500">{new Date(t.timestamp).toLocaleString('ja-JP')}</span>
+          <span className={`font-bold ${t.type === 'out' || t.type === 'sale' ? 'text-orange-700' : 'text-blue-700'}`}>{t.type === 'out' || t.type === 'sale' ? '出庫' : '入庫'}</span>
+          <span className="font-semibold truncate">{t.productName}</span>
+          <span className="font-black text-right">{t.type === 'out' || t.type === 'sale' ? '-' : '+'}{t.quantity}</span>
+        </div>)}
+        {!transactions.length && <Empty text="入出庫履歴はまだありません。"/>}
+      </div>
+    </Card>
+  </div>;
+}
+
+function Stat({ title, value, icon, warn }) {
+  return <Card className={`p-4 md:p-5 ${warn ? 'border-red-300 bg-red-50' : ''}`}><div className="flex justify-between gap-2"><div><div className="text-xs md:text-sm font-bold text-gray-600">{title}</div><div className="text-xl md:text-3xl font-black mt-1">{value}</div></div><div className="p-2.5 rounded-xl bg-gray-50 h-fit">{icon}</div></div></Card>;
+}
+
+function Empty({ text }) { return <div className="py-8 text-center text-gray-500 text-sm">{text}</div>; }
+
+function InventoryView({ inventory, saveProduct, onDelete }) {
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState(null);
+  const filtered = inventory.filter(x => normalizeText(x.name).includes(normalizeText(search)) || String(x.barcode || '').includes(search) || String(x.sku || '').includes(search));
+
+  const newProduct = () => setEditing({ id: '', sku: '', barcode: '', name: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' });
+
+  return <div className="space-y-4">
+    <div className="flex flex-col md:flex-row gap-3 justify-between">
+      <div className="relative flex-1 max-w-xl"><Search className="absolute left-3 top-3 text-gray-400" size={20}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="商品名・SKU・JANコードで検索" className="w-full pl-10 pr-4 py-2.5 rounded-xl border-2 border-gray-300 focus:border-blue-600 outline-none"/></div>
+      <button onClick={newProduct} className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl flex items-center justify-center gap-2"><Plus size={19}/>商品登録</button>
+    </div>
+
+    {editing && <ProductForm product={editing} onCancel={() => setEditing(null)} onSave={async p => { await saveProduct(p); setEditing(null); toast('商品マスタを保存しました。'); }}/>} 
+
+    <Card className="overflow-hidden">
+      <div className="hidden md:block overflow-x-auto"><table className="w-full text-sm min-w-[880px]"><thead className="bg-gray-100 border-b-2 border-gray-200"><tr><Th>商品 / SKU</Th><Th>JAN・バーコード</Th><Th>現在庫</Th><Th>注意 / レッド</Th><Th>仕入単価</Th><Th>販売単価</Th><Th>操作</Th></tr></thead><tbody className="divide-y divide-gray-200">{filtered.map(x => <tr key={x.id} className="hover:bg-gray-50"><Td><div className="font-bold">{x.name}</div><div className="text-xs text-gray-500">{x.sku || x.id}</div></Td><Td><span className="font-mono">{x.barcode || '未登録'}</span></Td><Td><StockBadge x={x}/></Td><Td><div className="text-amber-700 font-bold">注意 {getWarningStock(x)}</div><div className="text-red-700 font-black">レッド {getCriticalStock(x)}</div></Td><Td>{yen(x.cost)}</Td><Td>{yen(x.price)}</Td><Td><div className="flex gap-2"><button onClick={() => setEditing({...x})} className="text-blue-700 font-bold">編集</button><button onClick={() => { if(confirm(`${x.name}を無効化しますか？`)) onDelete(x.id); }} className="text-red-600"><Trash2 size={17}/></button></div></Td></tr>)}</tbody></table></div>
+      <div className="md:hidden divide-y divide-gray-200">{filtered.map(x => <div key={x.id} className="p-4"><div className="flex justify-between gap-3"><div className="min-w-0"><div className="font-extrabold text-base">{x.name}</div><div className="text-xs text-gray-500 mt-1">SKU: {x.sku || '-'} / JAN: {x.barcode || '-'}</div></div><StockBadge x={x}/></div><div className="grid grid-cols-3 gap-2 mt-3 text-xs"><Mini label="注意 / レッド" value={`${getWarningStock(x)} / ${getCriticalStock(x)}`}/><Mini label="仕入" value={yen(x.cost)}/><Mini label="販売" value={yen(x.price)}/></div><button onClick={() => setEditing({...x})} className="mt-3 w-full py-2 rounded-lg bg-gray-100 font-bold">編集</button></div>)}</div>
+      {!filtered.length && <Empty text="該当する商品がありません。"/>}
+    </Card>
+  </div>;
+}
+
+function ProductForm({ product, onSave, onCancel }) {
+  const [f, setF] = useState({...product, purchaseUnit: product.purchaseUnit || product.unit || '個', purchaseFactor: Number(product.purchaseFactor || 1), warningStock: Number(product.warningStock ?? Math.max(Number(product.minStock||5)*2,10))});
+  const set = (k,v) => setF(p => ({...p,[k]:v}));
+  const warning = Number(f.warningStock || 0);
+  const critical = Number(f.minStock || 0);
+  return <Card className="p-5 border-blue-300"><h3 className="font-extrabold text-lg mb-2">{f.id ? '商品マスタ編集' : '新規商品登録'}</h3><div className="p-3 mb-4 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900">在庫は「基準単位」で管理します。例：抹茶1袋=1000gなら、基準単位=g、仕入単位=袋、換算量=1000 と設定します。</div><div className="grid md:grid-cols-3 gap-4">
+    <Field label="商品名 *"><input required value={f.name} onChange={e => set('name', e.target.value)} className="input"/></Field>
+    <Field label="SKU"><input value={f.sku || ''} onChange={e => set('sku', e.target.value)} className="input" placeholder="未入力なら自動採番"/></Field>
+    <Field label="JAN / 1次元バーコード"><input inputMode="numeric" value={f.barcode || ''} onChange={e => set('barcode', e.target.value.trim())} className="input font-mono"/></Field>
+    <Field label="カテゴリ"><input value={f.category || ''} onChange={e => set('category', e.target.value)} className="input"/></Field>
+    <Field label="在庫の基準単位"><select value={f.unit || '個'} onChange={e => set('unit', e.target.value)} className="input">{UNIT_OPTIONS.map(u=><option key={u}>{u}</option>)}</select></Field>
+    <Field label="仕入単位"><select value={f.purchaseUnit || f.unit || '個'} onChange={e => set('purchaseUnit', e.target.value)} className="input">{UNIT_OPTIONS.map(u=><option key={u}>{u}</option>)}</select></Field>
+    <Field label={`1 ${f.purchaseUnit || '仕入単位'} あたりの ${f.unit || '基準単位'} 数`}><input type="number" min="0.001" step="0.001" value={f.purchaseFactor ?? 1} onChange={e => set('purchaseFactor', Number(e.target.value))} className="input"/></Field>
+    <Field label={`現在庫（${f.unit || '個'}）`}><input type="number" step="0.001" value={f.stock ?? 0} onChange={e => set('stock', Number(e.target.value))} className="input" disabled={!!f.id}/></Field>
+    <Field label={`注意ライン（${f.unit || '個'}）`}><input type="number" min="0" step="0.001" value={f.warningStock ?? 10} onChange={e => set('warningStock', Number(e.target.value))} className="input"/></Field>
+    <Field label={`レッドライン（${f.unit || '個'}）`}><input type="number" min="0" step="0.001" value={f.minStock ?? 5} onChange={e => set('minStock', Number(e.target.value))} className="input"/></Field>
+    <Field label="仕入単価"><input type="number" min="0" value={f.cost ?? 0} onChange={e => set('cost', Number(e.target.value))} className="input"/></Field>
+    <Field label="販売単価"><input type="number" min="0" value={f.price ?? 0} onChange={e => set('price', Number(e.target.value))} className="input"/></Field>
+    <Field label="通知Gmail（任意）"><input type="email" value={f.notifyEmail || ''} onChange={e => set('notifyEmail', e.target.value.trim())} className="input" placeholder="空欄ならGAS共通設定"/></Field>
+    <div className="md:col-span-3"><Field label="別名・領収書表記（カンマ区切り）"><input value={f.aliases || ''} onChange={e => set('aliases', e.target.value)} className="input" placeholder="例：抹茶BLEND, MATCHA POWDER"/></Field></div>
+  </div>{warning <= critical && <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm font-bold">注意ラインはレッドラインより大きい数にしてください。</div>}<div className="flex flex-col-reverse sm:flex-row justify-end gap-2 mt-5"><button onClick={onCancel} className="px-5 py-2.5 rounded-xl bg-gray-100 font-bold">キャンセル</button><button onClick={() => { if(!f.name.trim()) return toast('商品名を入力してください。','warn'); if(Number(f.warningStock||0)<=Number(f.minStock||0)) return toast('注意ラインはレッドラインより大きくしてください。','warn'); onSave(f); }} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2"><Save size={18}/>保存</button></div></Card>;
+}
+
+function TransactionsView({ inventory, transactions, recordMovement }) {
+  const [type,setType] = useState('in');
+  const [productId,setProductId] = useState('');
+  const [qty,setQty] = useState(1);
+  const [inputUnit,setInputUnit] = useState('');
+  const [note,setNote] = useState('');
+  const product = inventory.find(x=>x.id===productId);
+  useEffect(()=>{ if(product) setInputUnit(product.unit || '個'); },[productId]);
+  const factor = product ? movementFactor(product, inputUnit || product.unit) : 1;
+  const baseQty = product ? Math.round(Number(qty||0)*factor*1000)/1000 : 0;
+  const unitChoices = product ? Array.from(new Set([product.unit || '個', product.purchaseUnit || product.unit || '個'])) : [];
+  const submit = async () => {
+    try { await recordMovement({productId,type,quantity:qty,inputUnit:inputUnit||product?.unit,source:'手入力',note}); setQty(1); setNote(''); toast(type === 'in' ? '入庫を記録しました。' : '出庫を記録しました。'); }
+    catch(e){ toast(e.message,'error'); }
+  };
+  return <div className="grid lg:grid-cols-[380px_1fr] gap-5">
+    <Card className="p-5 h-fit"><h3 className="font-extrabold text-lg mb-4">入出庫を手入力</h3><div className="space-y-4">
+      <Field label="種別"><div className="grid grid-cols-2 gap-2"><button onClick={() => setType('in')} className={`py-2.5 rounded-xl font-bold border-2 ${type==='in'?'bg-blue-600 text-white border-blue-600':'border-gray-300'}`}>入庫</button><button onClick={() => setType('out')} className={`py-2.5 rounded-xl font-bold border-2 ${type==='out'?'bg-orange-600 text-white border-orange-600':'border-gray-300'}`}>出庫</button></div></Field>
+      <Field label="商品"><select value={productId} onChange={e=>setProductId(e.target.value)} className="input"><option value="">商品を選択</option>{inventory.map(x=><option key={x.id} value={x.id}>{x.name}（在庫 {x.stock} {x.unit||'個'}）</option>)}</select></Field>
+      {product && <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-sm"><b>現在庫:</b> {product.stock} {product.unit||'個'}<br/><b>換算:</b> 1 {product.purchaseUnit||product.unit||'個'} = {product.purchaseFactor||1} {product.unit||'個'}</div>}
+      <Field label={type==='out' ? '出庫単位' : '入庫単位'}><div className="grid grid-cols-2 gap-2">{unitChoices.map(u=><button key={u} onClick={()=>setInputUnit(u)} className={`py-2.5 rounded-xl border-2 font-bold ${inputUnit===u?'bg-gray-900 text-white border-gray-900':'bg-white border-gray-300'}`}>{u}</button>)}</div></Field>
+      <Field label="数量"><input type="number" min="0.001" step="0.001" value={qty} onChange={e=>setQty(Number(e.target.value))} className="input text-lg font-black"/></Field>
+      <div className="grid grid-cols-4 gap-2">{[1,5,10,20].map(n=><button key={n} onClick={()=>setQty(n)} className="py-2 rounded-lg bg-gray-100 font-bold">{n}</button>)}</div>
+      {product && <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-sm">在庫には <b>{baseQty} {product.unit||'個'}</b> として反映されます。</div>}
+      <Field label="メモ"><input value={note} onChange={e=>setNote(e.target.value)} className="input"/></Field>
+      <button disabled={!productId} onClick={submit} className={`w-full py-3 rounded-xl text-white font-extrabold disabled:opacity-40 ${type==='out'?'bg-orange-600':'bg-blue-600'}`}>記録する</button>
+    </div></Card>
+    <Card className="overflow-hidden"><div className="p-5 border-b-2 border-gray-200"><h3 className="font-extrabold text-lg">入出庫履歴</h3></div><div className="divide-y divide-gray-100">{transactions.slice(0,100).map(t=><div key={t.id} className="p-4 grid grid-cols-[1fr_auto] md:grid-cols-[170px_80px_1fr_130px] gap-2 text-sm items-center"><span className="hidden md:block text-gray-500">{new Date(t.timestamp).toLocaleString('ja-JP')}</span><span className={`font-extrabold ${t.type==='out'||t.type==='sale'?'text-orange-700':'text-blue-700'}`}>{t.type==='out'||t.type==='sale'?'出庫':'入庫'}</span><div><div className="font-bold">{t.productName}</div><div className="text-xs text-gray-500">{t.source || ''} {t.note || ''}</div></div><div className="font-black text-right">{t.type==='out'||t.type==='sale'?'-':'+'}{t.inputQuantity ?? t.quantity} {t.inputUnit || t.baseUnit || ''}{t.inputUnit && t.baseUnit && t.inputUnit!==t.baseUnit ? <div className="text-[11px] text-gray-500">= {t.quantity} {t.baseUnit}</div>:null}</div></div>)}{!transactions.length&&<Empty text="履歴がありません。"/>}</div></Card>
+  </div>;
+}
+
+function ScanInspectionView({ inventory, setInventory, setTransactions, setAlerts, api, saveProduct, pullFromSheet, recordMovement }) {
+  const [mode,setMode] = useState('barcode');
+  return <div className="space-y-5">
+    <div className="grid grid-cols-2 gap-2 max-w-2xl">
+      <button onClick={()=>setMode('barcode')} className={`py-3 rounded-xl border-2 font-extrabold flex items-center justify-center gap-2 ${mode==='barcode'?'bg-blue-600 text-white border-blue-600':'bg-white border-gray-300'}`}><Barcode size={20}/>商品バーコード</button>
+      <button onClick={()=>setMode('receipt')} className={`py-3 rounded-xl border-2 font-extrabold flex items-center justify-center gap-2 ${mode==='receipt'?'bg-emerald-600 text-white border-emerald-600':'bg-white border-gray-300'}`}><ClipboardCheck size={20}/>領収書OCR・検品</button>
+    </div>
+    {mode==='barcode' ? <ProductScanPanel inventory={inventory} saveProduct={saveProduct} api={api} recordMovement={recordMovement}/> : <ReceiptInspectionPanel inventory={inventory} api={api} setInventory={setInventory} setTransactions={setTransactions} setAlerts={setAlerts} pullFromSheet={pullFromSheet}/>} 
+  </div>;
+}
+
+function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
+  const [barcode,setBarcode] = useState('');
+  const [found,setFound] = useState(null);
+  const [unknown,setUnknown] = useState(null);
+  const [manual,setManual] = useState('');
+  const imageRef = useRef(null);
+
+  const onCode = (rawCode) => {
+    const code = String(rawCode || '').trim();
+    if(!code) return;
+
+    const p = inventory.find(x => String(x.barcode || '') === code);
+    const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD (端末の現地日付)
+    const history = readJson(LS.productScanHistory, []);
+    const sameDay = history.filter(h => h.date === today && h.barcode === code);
+
+    if(sameDay.length > 0){
+      const label = p?.name || `バーコード ${code}`;
+      const lastTime = sameDay[sameDay.length - 1]?.timestamp
+        ? new Date(sameDay[sameDay.length - 1].timestamp).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})
+        : '時刻不明';
+      const proceed = window.confirm(
+        `【重複スキャン警告】\n${label} は本日すでに ${sameDay.length}回スキャン済みです。\n直近: ${lastTime}\n\nスキャンを続けますか？`
+      );
+      if(!proceed){
+        toast('重複スキャンをキャンセルしました。','warn');
+        return;
+      }
+    }
+
+    const nextHistory = [...history, {
+      id: uid('pscan'),
+      date: today,
+      barcode: code,
+      productId: p?.id || '',
+      productName: p?.name || '',
+      timestamp: Date.now(),
+      source: '商品バーコード'
+    }].slice(-3000);
+    localStorage.setItem(LS.productScanHistory, JSON.stringify(nextHistory));
+
+    setBarcode(code);
+    setFound(p || null);
+    if(!p) setUnknown({ barcode: code, name:'', sku:'', category:'', unit:'個', purchaseUnit:'個', purchaseFactor:1, stock:0, warningStock:10, minStock:5, cost:0, price:0, notifyEmail:'', aliases:'' });
+    else setUnknown(null);
+  };
+
+  const identifyImage = async (file) => {
+    try {
+      const image = await compressImageFile(file);
+      const result = await api('geminiIdentifyProduct',{image});
+      const d = result.data || {};
+      const code = d.barcode || barcode;
+      const p = inventory.find(x => String(x.barcode || '') === String(code));
+      if(p){ setFound(p); setUnknown(null); setBarcode(code); return; }
+      setBarcode(code);
+      setUnknown(u => ({...(u||{}), barcode:code, name:d.productName||u?.name||'', category:d.category||u?.category||'', unit:'個', purchaseUnit:'個', purchaseFactor:1, stock:0, warningStock:10, minStock:5, cost:0, price:0, notifyEmail:'', aliases:''}));
+    } catch(e){ toast(e.message,'error'); }
+  };
+
+  return <div className="grid xl:grid-cols-[1fr_420px] gap-5">
+    <Card className="p-5"><h3 className="font-extrabold text-lg flex items-center gap-2"><Barcode/>1次元コードを読む</h3><p className="text-sm text-gray-600 mt-2 mb-4">JAN/EAN/Code128等は端末のバーコード検出機能を優先します。数字をAI推測だけに頼らない設計です。</p><LiveBarcodeScanner onDetected={onCode}/><div className="mt-4 flex gap-2"><input value={manual} onChange={e=>setManual(e.target.value)} inputMode="numeric" placeholder="コードを手入力" className="input flex-1 font-mono"/><button onClick={()=>manual&&onCode(manual.trim())} className="px-4 rounded-xl bg-gray-900 text-white font-bold">検索</button></div>
+      <div className="mt-4 border-t pt-4"><div className="text-sm font-bold mb-2">バーコードが読みにくい場合：商品画像から補助認識</div><input ref={imageRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>e.target.files[0]&&identifyImage(e.target.files[0])}/><button onClick={()=>imageRef.current?.click()} className="w-full py-2.5 rounded-xl border-2 border-gray-300 font-bold flex items-center justify-center gap-2"><Camera size={18}/>商品画像を撮影</button></div>
+    </Card>
+    <Card className="p-5 h-fit"><h3 className="font-extrabold text-lg mb-4">読取結果</h3>{found ? <div className="space-y-3"><div className="p-4 rounded-xl bg-emerald-50 border-2 border-emerald-200"><div className="text-xs font-bold text-emerald-700">商品マスタ一致</div><div className="text-xl font-black mt-1">{found.name}</div><div className="font-mono text-sm mt-1">{found.barcode}</div></div><div className="grid grid-cols-2 gap-2"><Mini label="現在庫" value={`${found.stock} ${found.unit||'個'}`}/><Mini label="注意 / レッド" value={`${getWarningStock(found)} / ${getCriticalStock(found)}`}/></div><QuickMovement product={found} recordMovement={recordMovement}/></div> : unknown ? <div><div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 font-bold mb-4">未登録のバーコードです。内容を確認して商品マスタへ登録してください。</div><ProductForm product={unknown} onCancel={()=>setUnknown(null)} onSave={async p=>{const saved=await saveProduct(p); setFound(saved); setUnknown(null); toast('商品を登録しました。');}}/></div> : <Empty text="コードを読み取ると商品情報を表示します。"/>}</Card>
+  </div>;
+}
+
+
+function QuickMovement({ product, recordMovement }) {
+  const [type,setType]=useState('in');
+  const [unit,setUnit]=useState(product.unit||'個');
+  const [qty,setQty]=useState(1);
+  useEffect(()=>{setUnit(product.unit||'個');setQty(1);},[product.id]);
+  const choices=Array.from(new Set([product.unit||'個',product.purchaseUnit||product.unit||'個']));
+  const baseQty=Math.round(Number(qty||0)*movementFactor(product,unit)*1000)/1000;
+  const save=async()=>{try{await recordMovement({productId:product.id,type,quantity:qty,inputUnit:unit,source:'商品バーコード'});toast(`${type==='in'?'入庫':'出庫'}を記録しました。`);}catch(e){toast(e.message,'error');}};
+  return <div className="p-3 rounded-xl border-2 border-gray-200 bg-white">
+    <div className="font-extrabold mb-2">この商品を記録</div>
+    <div className="grid grid-cols-2 gap-2"><button onClick={()=>setType('in')} className={`py-2 rounded-lg font-bold ${type==='in'?'bg-blue-600 text-white':'bg-gray-100'}`}>入庫</button><button onClick={()=>setType('out')} className={`py-2 rounded-lg font-bold ${type==='out'?'bg-orange-600 text-white':'bg-gray-100'}`}>出庫</button></div>
+    <div className="grid grid-cols-2 gap-2 mt-2">{choices.map(u=><button key={u} onClick={()=>setUnit(u)} className={`py-2 rounded-lg border-2 font-bold ${unit===u?'border-gray-900 bg-gray-900 text-white':'border-gray-300'}`}>{u}</button>)}</div>
+    <div className="grid grid-cols-[1fr_auto] gap-2 mt-2"><input type="number" min="0.001" step="0.001" value={qty} onChange={e=>setQty(Number(e.target.value))} className="input font-black"/><button onClick={save} className={`px-4 rounded-xl text-white font-black ${type==='out'?'bg-orange-600':'bg-blue-600'}`}>確定</button></div>
+    <div className="text-xs text-gray-600 mt-2">在庫反映: {baseQty} {product.unit||'個'}</div>
+  </div>;
+}
+
+function LiveBarcodeScanner({ onDetected }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
+  const detectorRef = useRef(null);
+  const lastDetectedRef = useRef({ code: '', at: 0 });
+  const [running,setRunning] = useState(false);
+  const [supported,setSupported] = useState(typeof window !== 'undefined' && 'BarcodeDetector' in window);
+  const [last,setLast] = useState('');
+
+  const stop = useCallback(() => {
+    if(rafRef.current) cancelAnimationFrame(rafRef.current);
+    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+    streamRef.current=null;
+    rafRef.current=null;
+    setRunning(false);
+  },[]);
+
+  useEffect(()=>()=>stop(),[stop]);
+
+  const start = async () => {
+    if(!('BarcodeDetector' in window)){ setSupported(false); return; }
+    try {
+      detectorRef.current = new window.BarcodeDetector({formats:['ean_13','ean_8','code_128','code_39','codabar','itf','upc_a','upc_e']});
+      const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+      streamRef.current=stream;
+      videoRef.current.srcObject=stream;
+      await videoRef.current.play();
+      setRunning(true);
+      const tick = async () => {
+        if(!videoRef.current || !detectorRef.current) return;
+        try {
+          const codes = await detectorRef.current.detect(videoRef.current);
+          const code = codes?.[0]?.rawValue ? String(codes[0].rawValue).trim() : '';
+          if(code){
+            const now = Date.now();
+            const lastHit = lastDetectedRef.current;
+            const duplicateTooSoon = code === lastHit.code && (now - lastHit.at) < 900;
+            if(!duplicateTooSoon){
+              lastDetectedRef.current = { code, at: now };
+              setLast(code);
+              onDetected(code);
+              if(navigator.vibrate) navigator.vibrate(80);
+            }
+          }
+        } catch {}
+        rafRef.current=requestAnimationFrame(tick);
+      };
+      tick();
+    } catch(e){ toast(`カメラを開始できません: ${e.message}`,'error'); }
+  };
+
+  return <div>{supported ? <div className="space-y-3"><div className="relative rounded-2xl overflow-hidden bg-black aspect-video"><video ref={videoRef} muted playsInline className="w-full h-full object-cover"/><div className="absolute inset-[22%_10%] border-2 border-red-500 rounded-xl pointer-events-none"></div>{!running&&<div className="absolute inset-0 flex items-center justify-center text-white bg-black/40 font-bold">カメラ停止中</div>}</div><button onClick={running?stop:start} className={`w-full py-3 rounded-xl text-white font-extrabold ${running?'bg-red-600':'bg-blue-600'}`}>{running?'カメラを停止':'バーコードカメラを開始'}</button>{last&&<div className="text-center font-mono text-lg font-black">読取: {last}</div>}<div className="text-xs text-gray-500 text-center">同じコードは0.9秒以内の連続検出を無視します。さらに、同一商品を同じ日に再度スキャンすると重複警告を表示します。</div></div> : <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-sm text-amber-900"><b>このブラウザはリアルタイムBarcodeDetector非対応です。</b><br/>Android Chrome等で開くか、下の手入力・商品画像補助を利用してください。</div>}</div>;
+}
+
+function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions, setAlerts, pullFromSheet }) {
+  const fileRef = useRef(null);
+  const [preview,setPreview] = useState('');
+  const [reading,setReading] = useState(false);
+  const [receipt,setReceipt] = useState(null);
+  const [scanned,setScanned] = useState({});
+  const [lastCode,setLastCode] = useState('');
+  const [committing,setCommitting] = useState(false);
+
+  const readReceipt = async (file) => {
+    setReading(true); setReceipt(null); setScanned({});
+    try {
+      const image = await compressImageFile(file);
+      setPreview(image);
+      const result = await api('geminiReceiptOcr',{image});
+      const d = result.data || {};
+      const items = (d.items || []).map((x,i) => {
+        const exact = inventory.find(p => [p.name, ...(String(p.aliases||'').split(',').filter(Boolean))].some(n => normalizeText(n) === normalizeText(x.name)));
+        return {...x, rowId:`r${i}`, productId: exact?.id || '', barcode: exact?.barcode || ''};
+      });
+      setReceipt({...d, items});
+    } catch(e){ toast(e.message,'error'); }
+    finally{ setReading(false); }
+  };
+
+  const mapItem = (rowId, productId) => {
+    const p = inventory.find(x=>x.id===productId);
+    setReceipt(r=>({...r,items:r.items.map(x=>x.rowId===rowId?{...x,productId,barcode:p?.barcode||''}:x)}));
+  };
+
+  const editReceiptItem = (rowId, key, value) => {
+    setReceipt(r=>({...r,items:r.items.map(x=>{
+      if(x.rowId!==rowId) return x;
+      const next={...x,[key]:value};
+      if(key==='quantity' || key==='unitPrice'){
+        const q=Math.max(0,Number(key==='quantity'?value:(next.quantity||1))||0);
+        const u=Math.max(0,Number(key==='unitPrice'?value:(next.unitPrice||next.price||0))||0);
+        next.amount=q*u;
+      }
+      return next;
+    })}));
+  };
+
+  const onBarcode = (code) => {
+    setLastCode(code);
+    const p = inventory.find(x=>String(x.barcode||'')===String(code));
+    if(!p){ toast(`未登録バーコード: ${code}`,'error'); return; }
+    setScanned(s=>({...s,[p.id]:Number(s[p.id]||0)+1}));
+  };
+
+  const expectedByProduct = useMemo(() => {
+    const m={};
+    receipt?.items?.forEach(x=>{ if(x.productId) m[x.productId]=(m[x.productId]||0)+Number(x.quantity||1); });
+    return m;
+  },[receipt]);
+
+  const rows = useMemo(() => Object.entries(expectedByProduct).map(([productId,expected])=>{
+    const p=inventory.find(x=>x.id===productId); const actual=Number(scanned[productId]||0); return {productId,product:p,expected,actual,diff:actual-expected};
+  }),[expectedByProduct,scanned,inventory]);
+
+  const unmatched = receipt?.items?.filter(x=>!x.productId).length || 0;
+  const hasDiff = rows.some(x=>x.diff!==0);
+
+  const commit = async () => {
+    if(unmatched){ toast('未紐付けの商品があります。商品マスタを選択してください。','warn'); return; }
+    if(!rows.length){ toast('検品対象がありません。','warn'); return; }
+    const zeroScan = rows.every(x=>x.actual===0);
+    if(zeroScan && !confirm('バーコード検品数が0です。領収書記載数量を入庫数として登録しますか？')) return;
+    if(!zeroScan && hasDiff && !confirm('差異があります。実際に検品した数量で入庫し、差異アラートを記録しますか？')) return;
+    setCommitting(true);
+    try {
+      const result = await api('commitReceipt',{
+        receiptId: receipt.receiptId || uid('receipt'), vendor:receipt.vendor||'', receiptDate:receipt.date||'', total:receipt.total||0,
+        items:receipt.items, inspectedCounts:scanned, inspectionSkipped:zeroScan
+      });
+      if(result.data?.inventory) setInventory(result.data.inventory);
+      if(result.data?.transactions) setTransactions(result.data.transactions);
+      if(result.data?.alerts) setAlerts(result.data.alerts);
+      toast(hasDiff&&!zeroScan?'差異を記録して入庫しました。':'検品・入庫を確定しました。');
+      setReceipt(null);setPreview('');setScanned({});setLastCode('');
+      await pullFromSheet(true);
+    } catch(e){ toast(e.message,'error'); }
+    finally{setCommitting(false);}
+  };
+
+  return <div className="space-y-5">
+    <Card className="p-5"><div className="flex flex-col lg:flex-row gap-5"><div className="flex-1"><h3 className="font-extrabold text-lg">① 領収書・納品書をOCR</h3><p className="text-sm text-gray-600 mt-1">商品名・数量・単価・合計をGeminiで読み取り、商品マスタと照合します。</p><input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>e.target.files[0]&&readReceipt(e.target.files[0])}/><button onClick={()=>fileRef.current?.click()} className="mt-4 w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 text-white font-extrabold flex items-center justify-center gap-2"><Camera/>領収書を撮影・選択</button>{reading&&<div className="mt-3 font-bold text-emerald-700 flex items-center gap-2"><RefreshCw className="animate-spin" size={18}/>OCR解析中...</div>}</div>{preview&&<img src={preview} className="w-full lg:w-64 max-h-56 object-contain rounded-xl border bg-gray-50"/>}</div></Card>
+
+    {receipt && <>
+      <Card className="p-5"><h3 className="font-extrabold text-lg mb-2">② OCR結果を確認・修正して商品マスタへ紐付け</h3><div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900 mb-4"><b>重要：</b>OCRは自動読取なので、確定前に商品名・数量・単価を目視確認してください。誤読があればこの画面で修正できます。</div><div className="grid sm:grid-cols-3 gap-3 mb-4"><Field label="仕入先"><input className="input" value={receipt.vendor||''} onChange={e=>setReceipt(r=>({...r,vendor:e.target.value}))}/></Field><Field label="日付"><input className="input" value={receipt.date||''} onChange={e=>setReceipt(r=>({...r,date:e.target.value}))} placeholder="YYYY-MM-DD"/></Field><Field label="領収書合計"><input type="number" min="0" className="input" value={receipt.total??0} onChange={e=>setReceipt(r=>({...r,total:Number(e.target.value)||0}))}/></Field></div><div className="space-y-3">{receipt.items.map((x,i)=><div key={x.rowId} className={`p-3 rounded-xl border-2 ${x.productId?'border-emerald-200 bg-emerald-50':'border-amber-300 bg-amber-50'}`}><div className="grid md:grid-cols-[1fr_100px_130px_1.2fr] gap-2 items-end"><Field label={`商品名 ${i+1}`}><input className="input font-bold" value={x.name||''} onChange={e=>editReceiptItem(x.rowId,'name',e.target.value)}/></Field><Field label="数量"><input type="number" min="0" step="1" className="input font-black" value={x.quantity??1} onChange={e=>editReceiptItem(x.rowId,'quantity',Number(e.target.value))}/></Field><Field label="単価"><input type="number" min="0" className="input font-bold" value={x.unitPrice??x.price??0} onChange={e=>editReceiptItem(x.rowId,'unitPrice',Number(e.target.value))}/></Field><Field label="商品マスタ"><select value={x.productId||''} onChange={e=>mapItem(x.rowId,e.target.value)} className="input"><option value="">商品マスタを選択</option>{inventory.map(p=><option key={p.id} value={p.id}>{p.name} / {p.barcode||'コード未登録'}</option>)}</select></Field></div><div className="text-xs text-gray-600 mt-2">行金額: <b>{yen(x.amount ?? (Number(x.quantity||1)*Number(x.unitPrice||x.price||0)))}</b></div></div>)}</div></Card>
+
+      <Card className="p-5"><h3 className="font-extrabold text-lg">③ 実物をバーコード検品</h3><p className="text-sm text-gray-600 mt-1 mb-4">納品された商品をスキャンするたびに実数が+1され、領収書数量と自動比較します。</p><div className="grid xl:grid-cols-[1fr_420px] gap-5"><LiveBarcodeScanner onDetected={onBarcode}/><div><div className="space-y-2">{rows.map(r=><div key={r.productId} className={`p-3 rounded-xl border-2 ${r.diff===0?'border-emerald-200 bg-emerald-50':'border-red-300 bg-red-50'}`}><div className="font-bold">{r.product?.name}</div><div className="grid grid-cols-3 gap-2 mt-2 text-center"><Mini label="領収書" value={r.expected}/><Mini label="検品" value={r.actual}/><Mini label="差異" value={`${r.diff>0?'+':''}${r.diff}`}/></div><div className="flex gap-2 mt-2"><button onClick={()=>setScanned(s=>({...s,[r.productId]:Math.max(0,Number(s[r.productId]||0)-1)}))} className="flex-1 py-2 rounded-lg bg-white border font-bold">-1</button><button onClick={()=>setScanned(s=>({...s,[r.productId]:Number(s[r.productId]||0)+1}))} className="flex-1 py-2 rounded-lg bg-white border font-bold">+1</button><button onClick={()=>{const n=prompt('実際に検品した数量を入力',String(r.actual));if(n!==null)setScanned(s=>({...s,[r.productId]:Math.max(0,Number(n)||0)}));}} className="flex-1 py-2 rounded-lg bg-gray-900 text-white font-bold">数量</button></div></div>)}{unmatched>0&&<div className="p-3 rounded-xl bg-amber-50 border border-amber-300 font-bold text-amber-900">未紐付け {unmatched}件があります。</div>}{lastCode&&<div className="text-xs text-gray-500">最後の読取: <span className="font-mono">{lastCode}</span></div>}</div></div></div>
+        <button onClick={commit} disabled={committing||unmatched>0} className={`mt-5 w-full py-3.5 rounded-xl text-white font-black text-lg disabled:opacity-40 ${hasDiff?'bg-red-600':'bg-emerald-600'}`}>{committing?'登録中...':hasDiff?'差異を記録して入庫確定':'検品OK・入庫確定'}</button>
+      </Card>
+    </>}
+  </div>;
+}
+
+function StocktakeView({ inventory, api, setInventory, setAlerts, pullFromSheet }) {
+  const [counts,setCounts] = useState({});
+  const [lastCode,setLastCode] = useState('');
+  const [saving,setSaving] = useState(false);
+  const [search,setSearch] = useState('');
+  const filtered = inventory.filter(x=>normalizeText(x.name).includes(normalizeText(search))||String(x.barcode||'').includes(search));
+
+  const onCode = (code) => {
+    setLastCode(code);
+    const p=inventory.find(x=>String(x.barcode||'')===String(code));
+    if(!p){toast(`商品マスタ未登録: ${code}`,'error');return;}
+    setCounts(c=>({...c,[p.id]:Number(c[p.id]||0)+1}));
+  };
+  const varianceCount = inventory.filter(p => counts[p.id] !== undefined && Number(counts[p.id]) !== Number(p.stock||0)).length;
+  const save = async () => {
+    const items = inventory.filter(p=>counts[p.id]!==undefined).map(p=>({productId:p.id,actual:Number(counts[p.id]),reason:'',action:''}));
+    if(!items.length){toast('棚卸数量を入力してください。','warn');return;}
+    setSaving(true);
+    try{
+      const result=await api('saveStocktake',{countId:uid('count'),items});
+      if(result.data?.inventory)setInventory(result.data.inventory);
+      if(result.data?.alerts)setAlerts(result.data.alerts);
+      toast(varianceCount?`棚卸を保存しました。差異 ${varianceCount}件をアラート登録しました。`:'棚卸一致。保存しました。');
+      setCounts({}); await pullFromSheet(true);
+    }catch(e){toast(e.message,'error');}finally{setSaving(false);}
+  };
+  return <div className="space-y-5"><div className="grid xl:grid-cols-[460px_1fr] gap-5"><Card className="p-5"><h3 className="font-extrabold text-lg mb-2">バーコード棚卸</h3><p className="text-sm text-gray-600 mb-4">実物を1個ずつスキャンすると実地在庫を加算します。ケース品は右の「実数入力」でまとめて入力できます。</p><LiveBarcodeScanner onDetected={onCode}/>{lastCode&&<div className="mt-2 text-sm">最後の読取: <b className="font-mono">{lastCode}</b></div>}</Card><div className="space-y-3"><div className="flex flex-col sm:flex-row gap-2 justify-between"><div className="relative flex-1"><Search className="absolute left-3 top-3 text-gray-400" size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} className="input pl-9" placeholder="商品検索"/></div><button onClick={()=>setCounts({})} className="px-4 py-2 rounded-xl bg-gray-100 font-bold flex items-center gap-2 justify-center"><RotateCcw size={18}/>クリア</button></div>{filtered.map(p=>{const actual=counts[p.id];const diff=actual===undefined?null:Number(actual)-Number(p.stock||0);return <Card key={p.id} className={`p-4 ${diff!==null&&diff!==0?'border-red-300':''}`}><div className="flex justify-between gap-3"><div className="min-w-0"><div className="font-extrabold">{p.name}</div><div className="text-xs text-gray-500">帳簿在庫 {p.stock} / JAN {p.barcode||'-'}</div></div><div className={`text-right ${diff!==null&&diff!==0?'text-red-700':'text-emerald-700'}`}><div className="text-xs font-bold">差異</div><div className="text-xl font-black">{diff===null?'未入力':`${diff>0?'+':''}${diff}`}</div></div></div><div className="grid grid-cols-[1fr_auto_auto] gap-2 mt-3"><input type="number" min="0" value={actual??''} onChange={e=>setCounts(c=>({...c,[p.id]:Math.max(0,Number(e.target.value))}))} placeholder="実地在庫" className="input text-lg font-black"/><button onClick={()=>setCounts(c=>({...c,[p.id]:Math.max(0,Number(c[p.id]??0)-1)}))} className="w-12 rounded-xl border-2 font-black">-</button><button onClick={()=>setCounts(c=>({...c,[p.id]:Number(c[p.id]??0)+1}))} className="w-12 rounded-xl border-2 font-black">+</button></div></Card>})}</div></div><div className="sticky bottom-20 md:bottom-4 z-10"><button onClick={save} disabled={saving} className={`w-full py-4 rounded-2xl text-white font-black shadow-xl ${varianceCount?'bg-red-600':'bg-blue-600'}`}>{saving?'保存中...':`棚卸を確定してSheetへ転記${varianceCount?`（差異 ${varianceCount}件）`:''}`}</button></div></div>;
+}
+
+function AnalysisView({ inventory, transactions, api }) {
+  const [text,setText]=useState('');const [loading,setLoading]=useState(false);
+  const run=async()=>{setLoading(true);try{const r=await api('geminiAnalysis',{inventory:inventory.map(x=>({name:x.name,stock:x.stock,minStock:x.minStock,cost:x.cost})),transactions:transactions.slice(0,100)});setText(r.data?.text||'');}catch(e){toast(e.message,'error');}finally{setLoading(false);}};
+  return <div className="space-y-5"><Card className="p-5 md:p-7 bg-gradient-to-r from-blue-700 to-indigo-700 text-white border-0"><div className="flex flex-col md:flex-row justify-between gap-4 items-start md:items-center"><div><h3 className="font-black text-2xl flex items-center gap-2"><BrainCircuit/>Gemini 在庫アナリスト</h3><p className="text-blue-100 mt-2">在庫不足、滞留在庫、仕入傾向、差異リスクを分析します。APIキーはGAS側に保管されます。</p></div><button onClick={run} disabled={loading||!inventory.length} className="px-6 py-3 rounded-xl bg-white text-blue-800 font-black disabled:opacity-50">{loading?'分析中...':'分析レポート生成'}</button></div></Card>{text&&<Card className="p-5 md:p-8"><SimpleMarkdown text={text}/></Card>}</div>;
+}
+
+function SettingsView({ gasUrl,setGasUrl,syncToken,setSyncToken,connection,api,pullFromSheet,flushQueue,inventory }) {
+  const [testing,setTesting]=useState(false);const [info,setInfo]=useState(null);
+  const test=async()=>{setTesting(true);try{const r=await api('ping');setInfo(r.data);toast('GAS・スプレッドシート接続OKです。');}catch(e){toast(e.message,'error');}finally{setTesting(false);}};
+  const migrate=async()=>{if(!confirm('既存の「4_棚卸表」から、品名が入っている商品を新しい商品マスタへ移行します。元シートは削除しません。実行しますか？'))return;try{const r=await api('migrateLegacyStocktake');toast(`移行しました: ${r.data?.imported||0}件`);await pullFromSheet(true);}catch(e){toast(e.message,'error');}};
+  const exportJson=()=>{const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),inventory},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`BAKERU_NEKKO_inventory_${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);};
+  const exportCsv=()=>{const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;const head=['id','sku','barcode','name','category','unit','purchaseUnit','purchaseFactor','stock','warningStock','minStock','cost','price'];const lines=[head.join(','),...inventory.map(x=>head.map(k=>q(x[k])).join(','))];const blob=new Blob(['\uFEFF'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`BAKERU_inventory_${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(a.href);};
+  return <div className="space-y-5 max-w-5xl"><Card className="p-5"><h3 className="font-extrabold text-lg flex items-center gap-2"><FileSpreadsheet/>Googleスプレッドシート連携</h3><p className="text-sm text-gray-600 mt-2">GAS Webアプリを中継し、商品・入出庫・OCR・棚卸・差異アラートを自動転記します。</p><div className="grid gap-4 mt-5"><Field label="GAS WebアプリURL"><input value={gasUrl} onChange={e=>setGasUrl(e.target.value.trim())} className="input" placeholder="https://script.google.com/macros/s/.../exec"/></Field><Field label="BAKERU同期トークン"><input value={syncToken} onChange={e=>setSyncToken(e.target.value.trim())} className="input font-mono" placeholder="GASの showConnectionInfo() で確認"/></Field></div><div className="grid sm:grid-cols-3 gap-2 mt-4"><button onClick={test} disabled={testing} className="py-2.5 rounded-xl bg-blue-600 text-white font-bold">{testing?'診断中...':'接続診断'}</button><button onClick={()=>pullFromSheet(false)} className="py-2.5 rounded-xl bg-gray-900 text-white font-bold">Sheetから再読込</button><button onClick={flushQueue} className="py-2.5 rounded-xl bg-gray-100 font-bold">未送信データを再同期</button></div>{info&&<div className="mt-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm"><b>接続先:</b> {info.spreadsheetName}<br/><b>Version:</b> {info.version}</div>}</Card>
+    <Card className="p-5"><h3 className="font-extrabold text-lg">初回移行</h3><p className="text-sm text-gray-600 mt-2">現在の「4_棚卸表」は消さず、新しい商品マスタ・初期在庫へ取り込みます。空の商品枠は取り込みません。</p><button onClick={migrate} className="mt-4 px-5 py-2.5 rounded-xl bg-amber-500 text-gray-950 font-black">旧棚卸表から移行</button></Card>
+    <Card className="p-5"><h3 className="font-extrabold text-lg flex items-center gap-2"><Link2/>NEKKO連携・エクスポート</h3><p className="text-sm text-gray-600 mt-2">NEKKO側は同じGASの <b>nekkoExport</b> APIを読み込めます。念のためJSON/CSV手動出力も残しています。</p><div className="grid sm:grid-cols-2 gap-2 mt-4"><button onClick={exportJson} className="py-2.5 rounded-xl bg-emerald-600 text-white font-bold flex items-center justify-center gap-2"><Download size={18}/>NEKKO用JSON</button><button onClick={exportCsv} className="py-2.5 rounded-xl bg-gray-900 text-white font-bold flex items-center justify-center gap-2"><Download size={18}/>在庫CSV</button></div></Card>
+    <Card className="p-5"><h3 className="font-extrabold text-lg">Gemini APIキー</h3><div className="mt-2 p-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900"><b>HTMLにはAPIキーを保存しません。</b> スプレッドシートに紐づくApps Scriptの「スクリプトプロパティ」に <span className="font-mono">GEMINI_API_KEY</span> として保存してください。ブラウザからキーが見えない構成です。</div></Card>
+  </div>;
+}
+
+function StockBadge({x}){const stage=stockStage(x);return <span className={`inline-flex px-2.5 py-1 rounded-full font-black ${stage==='critical'?'bg-red-100 text-red-800':stage==='warning'?'bg-amber-100 text-amber-800':'bg-emerald-100 text-emerald-800'}`}>{stage==='critical'?'🔴 ':stage==='warning'?'🟡 ':''}{x.stock} {x.unit||'個'}</span>}
+function Field({label,children}){return <label className="block"><span className="block text-sm font-bold text-gray-700 mb-1.5">{label}</span>{children}</label>}
+function Th({children}){return <th className="px-4 py-3 text-left font-extrabold text-gray-700 whitespace-nowrap">{children}</th>}
+function Td({children}){return <td className="px-4 py-3 align-middle">{children}</td>}
+function Mini({label,value}){return <div className="p-2 rounded-lg bg-gray-50 border border-gray-200"><div className="text-[11px] font-bold text-gray-500">{label}</div><div className="font-extrabold truncate">{value}</div></div>}
+
+function SimpleMarkdown({text}){
+  return <div className="space-y-2 leading-relaxed">{String(text).split('\n').map((line,i)=>{
+    if(line.startsWith('### '))return <h3 key={i} className="text-lg font-black mt-5">{line.slice(4)}</h3>;
+    if(line.startsWith('## '))return <h2 key={i} className="text-xl font-black mt-6 border-b pb-2">{line.slice(3)}</h2>;
+    if(line.startsWith('# '))return <h1 key={i} className="text-2xl font-black mt-6">{line.slice(2)}</h1>;
+    if(line.startsWith('- ')||line.startsWith('* '))return <div key={i} className="pl-4">• {line.slice(2)}</div>;
+    if(!line.trim())return <div key={i} className="h-2"/>;
+    const parts=line.split(/(\*\*.*?\*\*)/g);return <p key={i}>{parts.map((p,j)=>p.startsWith('**')&&p.endsWith('**')?<strong key={j}>{p.slice(2,-2)}</strong>:p)}</p>;
+  })}</div>;
+}
+
+
+
+// 検索エンジン対策: GitHub Pages等で公開しても検索結果へ載せない。
+// robots.txt と併用。認証機能ではないため、URLを知る人のアクセス自体は防がない。
+if (typeof document !== 'undefined') {
+  const ensureMeta = (name, content) => {
+    let meta = document.head.querySelector(`meta[name="${name}"]`);
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', name);
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute('content', content);
+  };
+  ensureMeta('robots', 'noindex,nofollow,noarchive,nosnippet,noimageindex');
+  ensureMeta('googlebot', 'noindex,nofollow,noarchive,nosnippet,noimageindex');
+  ensureMeta('bingbot', 'noindex,nofollow,noarchive,nosnippet,noimageindex');
+}
+
+// Tailwind環境で共通入力スタイルとして使用する想定:
+// className="input" が未定義の環境でも、下記style注入で表示を保証。
+if (typeof document !== 'undefined' && !document.getElementById('bakeru-v23-style')) {
+  const style=document.createElement('style');style.id='bakeru-v23-style';style.textContent=`
+    .input{width:100%;border:2px solid #d1d5db;border-radius:.75rem;padding:.65rem .8rem;background:#fff;color:#111827;outline:none;min-height:44px}
+    .input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+    .input:disabled{background:#f3f4f6;color:#6b7280}
+    @media(max-width:767px){button,.input,select{font-size:16px} body{overscroll-behavior-y:contain}}
+  `;document.head.appendChild(style);
+}

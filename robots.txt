@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# BAKERU 商品・在庫管理
+# 検索結果への掲載防止は各ページの noindex で行います。
+# Google公式仕様上、robots.txt でページを完全遮断すると noindex を確認できないため、
+# ここではクロールを許可して noindex を確実に認識させます。
