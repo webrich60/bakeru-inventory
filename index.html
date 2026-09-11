@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.6.4</title>
-  <!-- BAKERU_BUILD: 2.6.4-unit-conversion -->
+  <title>BAKERU 商品・在庫管理 v2.6.7</title>
+  <!-- BAKERU_BUILD: 2.6.7-step3-test-mode-switch -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -65,7 +65,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
 /*
-  BAKERU 商品・在庫管理 v2.6.4
+  BAKERU 商品・在庫管理 v2.6.7
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -300,6 +300,9 @@ function App() {
     const [connection, setConnection] = useState('offline');
     const [syncing, setSyncing] = useState(false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    // STEP3: テストモードは安全のため毎回「本番」から開始。
+    // テストへ切替時だけ T01/T02... の専用APIを使用する。
+    const [testMode, setTestMode] = useState(false);
     useEffect(() => {
         let alive = true;
         (async () => {
@@ -324,8 +327,22 @@ function App() {
             setAlerts(data.alerts);
     }, []);
     const api = useCallback(async (action, payload = {}, options = {}) => {
+        // STEP3: 本番APIとテスト専用APIを明示的に分離。
+        const testActionMap = {
+            bootstrap: 'testBootstrap',
+            upsertProduct: 'testUpsertProduct',
+            recordMovement: 'testRecordMovement'
+        };
+        const blockedInTest = new Set([
+            'deleteProduct', 'commitReceipt', 'saveStocktake', 'resolveAlert',
+            'migrateLegacyStocktake', 'nekkoExport'
+        ]);
+        const actualAction = testMode ? (testActionMap[action] || action) : action;
+        if (testMode && blockedInTest.has(action)) {
+            throw new Error('テストモードではこの操作は本番データ保護のため無効です。');
+        }
         try {
-            const result = await gasRequest(gasUrl, syncToken, action, payload);
+            const result = await gasRequest(gasUrl, syncToken, actualAction, payload, testMode ? 'test' : 'prod');
             setConnection('online');
             return result;
         }
@@ -334,13 +351,38 @@ function App() {
             if (options.queueOnFail) {
                 const queue = await idbGet(LS.queue, []);
                 const nextQueue = Array.isArray(queue) ? queue : [];
-                nextQueue.push({ id: uid('q'), action, payload: compactForLocalCache(payload), queuedAt: Date.now() });
+                // actualActionを保存するので、後で再送しても本番/テストを取り違えない。
+                nextQueue.push({ id: uid('q'), action: actualAction, payload: compactForLocalCache(payload), queuedAt: Date.now(), dataMode: testMode ? 'test' : 'prod' });
                 await idbSet(LS.queue, nextQueue.slice(-100));
                 toast('通信できないため未送信操作を一時保留しました。', 'warn');
             }
             throw err;
         }
-    }, [gasUrl, syncToken]);
+    }, [gasUrl, syncToken, testMode]);
+
+    const switchDataMode = useCallback(async (nextTestMode) => {
+        if (nextTestMode === testMode) return;
+        if (!gasUrl || !syncToken) {
+            toast('先に「設定・連携」でSheet接続を完了してください。', 'warn');
+            return;
+        }
+        setSyncing(true);
+        try {
+            // state更新前に切替先を直接読み込み、成功した時だけモードを確定する。
+            const action = nextTestMode ? 'testBootstrap' : 'bootstrap';
+            const result = await gasRequest(gasUrl, syncToken, action, {}, nextTestMode ? 'test' : 'prod');
+            applyBootstrap(result.data || {});
+            setTestMode(nextTestMode);
+            setConnection('online');
+            toast(nextTestMode ? 'テストモードに切り替えました。本番データには書き込みません。' : '本番モードに戻しました。');
+        } catch (err) {
+            setConnection('offline');
+            toast(err.message || 'モード切替に失敗しました。', 'error');
+        } finally {
+            setSyncing(false);
+        }
+    }, [testMode, gasUrl, syncToken, applyBootstrap]);
+
     const pullFromSheet = useCallback(async (silent = false) => {
         if (!gasUrl || !syncToken)
             return;
@@ -367,7 +409,7 @@ function App() {
         const remaining = [];
         for (const item of queue) {
             try {
-                await gasRequest(gasUrl, syncToken, item.action, item.payload);
+                await gasRequest(gasUrl, syncToken, item.action, item.payload, item.dataMode === 'test' ? 'test' : 'prod');
             }
             catch {
                 remaining.push(item);
@@ -399,6 +441,10 @@ function App() {
         return local;
     };
     const deleteProduct = async (id) => {
+        if (testMode) {
+            toast('STEP3ではテスト商品の削除は無効です。本番データ保護を優先しています。', 'warn');
+            return;
+        }
         setInventory(prev => prev.filter(x => x.id !== id));
         try {
             await api('deleteProduct', { id }, { queueOnFail: true });
@@ -446,7 +492,7 @@ function App() {
         ['settings', '設定・連携', Settings]
     ];
     const pageTitle = ((_a = nav.find(n => n[0] === activeTab)) === null || _a === void 0 ? void 0 : _a[1]) || 'BAKERU';
-    const commonProps = { inventory, setInventory, transactions, setTransactions, alerts, setAlerts, api, saveProduct, recordMovement, pullFromSheet };
+    const commonProps = { inventory, setInventory, transactions, setTransactions, alerts, setAlerts, api, saveProduct, recordMovement, pullFromSheet, testMode };
     return (React.createElement("div", { className: "min-h-screen bg-gray-50 text-gray-900 font-sans md:flex" },
         React.createElement("aside", { className: "hidden md:flex w-64 bg-gray-950 text-white h-screen flex-col fixed inset-y-0 left-0 z-30 overflow-hidden" },
             React.createElement(Brand, null),
@@ -467,6 +513,7 @@ function App() {
                         React.createElement(Menu, { size: 20 })),
                     React.createElement("h2", { className: "font-extrabold text-lg md:text-xl truncate" }, pageTitle)),
                 React.createElement("div", { className: "flex items-center gap-2 md:gap-4" },
+                    React.createElement(ModeSwitcher, { testMode: testMode, onChange: switchDataMode, disabled: syncing }),
                     React.createElement("button", { onClick: () => pullFromSheet(false), disabled: syncing || !gasUrl, className: "p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-40", title: "\u540C\u671F" },
                         React.createElement(RefreshCw, { size: 19, className: syncing ? 'animate-spin' : '' })),
                     React.createElement("div", { className: "relative" },
@@ -475,6 +522,11 @@ function App() {
                     React.createElement("div", { className: "hidden sm:block" },
                         React.createElement(ConnectionBadge, { status: connection })))),
             React.createElement("div", { className: "p-4 md:p-7 max-w-[1500px] mx-auto" },
+                testMode && React.createElement("div", { className: "mb-5 p-4 rounded-2xl border-2 border-orange-400 bg-orange-50 text-orange-950 flex items-start gap-3 shadow-sm" },
+                    React.createElement("div", { className: "text-2xl" }, "🧪"),
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "font-black text-base md:text-lg" }, "テストモード中"),
+                        React.createElement("div", { className: "text-sm font-bold mt-1" }, "商品登録・入出庫は T01_商品マスタ / T02_入出庫履歴 に保存されます。本番データには書き込みません。"))),
                 activeTab === 'dashboard' && React.createElement(DashboardView, { ...commonProps }),
                 activeTab === 'scan' && React.createElement(ScanInspectionView, { ...commonProps }),
                 activeTab === 'inventory' && React.createElement(InventoryView, { ...commonProps, onDelete: deleteProduct }),
@@ -488,6 +540,18 @@ function App() {
             React.createElement(Icon, { size: 20 }),
             React.createElement("span", null, label))))));
 }
+function ModeSwitcher({ testMode, onChange, disabled = false }) {
+    return React.createElement("div", { className: "flex items-center rounded-xl border-2 border-gray-300 bg-gray-100 p-0.5 shadow-sm", title: "本番／テスト切替" },
+        React.createElement("button", {
+            type: "button", disabled, onClick: () => onChange(false),
+            className: `px-2.5 md:px-3 py-1.5 rounded-lg text-xs md:text-sm font-black transition ${!testMode ? 'bg-emerald-600 text-white shadow' : 'text-gray-600 hover:bg-white'} disabled:opacity-50`
+        }, "本番"),
+        React.createElement("button", {
+            type: "button", disabled, onClick: () => onChange(true),
+            className: `px-2.5 md:px-3 py-1.5 rounded-lg text-xs md:text-sm font-black transition ${testMode ? 'bg-orange-500 text-white shadow' : 'text-gray-600 hover:bg-white'} disabled:opacity-50`
+        }, "テスト"));
+}
+
 function Brand() {
     return React.createElement("div", { className: "flex-none p-5 border-b border-gray-800 flex items-center gap-3 min-h-20 bg-gray-950" },
         React.createElement("div", { className: "w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center" },
