@@ -7,7 +7,7 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理</title>
+  <title>BAKERU 商品・在庫管理 v2.5.4</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -46,32 +46,32 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
 /*
-  BAKERU 商品・在庫管理 v2.5
+  BAKERU 商品・在庫管理 v2.5.6
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
-  - GAS未接続時はLocalStorageに一時保存し、再接続後に同期可能
+  - GAS未接続時は未送信操作だけをLocalStorageに一時保存し、再接続後に同期
 */
 const LS = {
-    inventory: 'bakeru_inventory_v2',
-    transactions: 'bakeru_transactions_v2',
-    alerts: 'bakeru_alerts_v2',
     gasUrl: 'bakeru_gas_url_v2',
     syncToken: 'bakeru_sync_token_v2',
     queue: 'bakeru_sync_queue_v2',
-    productScanHistory: 'bakeru_product_scan_history_v2',
-    mode: 'bakeru_mode_v24'
+    productScanHistory: 'bakeru_product_scan_history_v2'
 };
-const MODE_STORAGE = {
-    prod: { inventory: LS.inventory, transactions: LS.transactions, alerts: LS.alerts, queue: LS.queue, productScanHistory: LS.productScanHistory },
-    test: { inventory: 'bakeru_test_inventory_v24', transactions: 'bakeru_test_transactions_v24', alerts: 'bakeru_test_alerts_v24', queue: 'bakeru_test_sync_queue_v24', productScanHistory: 'bakeru_test_product_scan_history_v24' }
-};
-const TEST_PRODUCTS = [
-    { id: 'test_matcha', sku: 'TEST-001', barcode: '4900000000017', name: 'テスト抹茶パウダー', category: '茶葉・原料', unit: 'g', purchaseUnit: '袋', purchaseFactor: 1000, stock: 1200, warningStock: 500, minStock: 250, cost: 2800, price: 0, notifyEmail: '', aliases: '抹茶' },
-    { id: 'test_hojicha', sku: 'TEST-002', barcode: '4900000000024', name: 'テストほうじ茶パウダー', category: '茶葉・原料', unit: 'g', purchaseUnit: '袋', purchaseFactor: 500, stock: 520, warningStock: 250, minStock: 100, cost: 1800, price: 0, notifyEmail: '', aliases: 'ほうじ茶' },
-    { id: 'test_cup', sku: 'TEST-003', barcode: '4900000000031', name: 'テストテイクアウトカップ', category: '資材', unit: '個', purchaseUnit: 'ケース', purchaseFactor: 50, stock: 38, warningStock: 30, minStock: 15, cost: 18, price: 0, notifyEmail: '', aliases: 'カップ' },
-    { id: 'test_kuromitsu', sku: 'TEST-004', barcode: '4900000000048', name: 'テスト黒蜜', category: '原料', unit: 'ml', purchaseUnit: '本', purchaseFactor: 1000, stock: 180, warningStock: 300, minStock: 150, cost: 780, price: 0, notifyEmail: '', aliases: '黒蜜' }
+// v2.5.6: 商品・在庫・履歴・アラートはGoogle Sheetを正本とし、LocalStorageへ常駐保存しない。
+// 以前のBAKERUキャッシュだけを削除して、webrich60.github.io全体の保存容量を圧迫しないようにする。
+const LEGACY_BAKERU_CACHE_KEYS = [
+    'bakeru_inventory_v2', 'bakeru_transactions_v2', 'bakeru_alerts_v2',
+    'bakeru_test_inventory_v24', 'bakeru_test_transactions_v24', 'bakeru_test_alerts_v24'
 ];
+function cleanupLegacyBakeruCache() {
+    try {
+        LEGACY_BAKERU_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
+    } catch (err) {
+        console.warn('BAKERU legacy cache cleanup skipped:', err);
+    }
+}
+cleanupLegacyBakeruCache();
 const readJson = (key, fallback) => {
     try {
         return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
@@ -172,22 +172,58 @@ function toast(message, tone = 'ok') {
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 3500);
 }
+
+let __bakeruStorageWarningShown = false;
+function safeStorageSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+        return true;
+    } catch (err) {
+        const quota = err && (err.name === 'QuotaExceededError' || err.name === 'NS_ERROR_DOM_QUOTA_REACHED' || err.code === 22 || err.code === 1014);
+        console.warn('BAKERU storage write skipped:', key, err);
+        if (quota && !__bakeruStorageWarningShown) {
+            __bakeruStorageWarningShown = true;
+            setTimeout(() => toast('端末の一時保存領域がいっぱいです。BAKERUは継続し、Google Sheetを正本として動作します。', 'warn'), 50);
+        }
+        return false;
+    }
+}
+function compactForLocalCache(value) {
+    const seen = new WeakSet();
+    const walk = (v, key = '') => {
+        if (v === null || v === undefined) return v;
+        if (typeof v === 'string') {
+            if (/^data:image\//i.test(v)) return '';
+            if (v.length > 20000 && /(image|photo|preview|base64|blob|receipt)/i.test(key)) return '';
+            return v;
+        }
+        if (typeof v !== 'object') return v;
+        if (seen.has(v)) return null;
+        seen.add(v);
+        if (Array.isArray(v)) return v.map(x => walk(x, key));
+        const o = {};
+        for (const [k, val] of Object.entries(v)) {
+            if (/(imageData|imageBase64|photoData|previewImage|receiptImage|base64)$/i.test(k)) continue;
+            o[k] = walk(val, k);
+        }
+        return o;
+    };
+    return walk(value);
+}
+
 function App() {
     var _a;
     const [activeTab, setActiveTab] = useState('dashboard');
-    const [inventory, setInventory] = useState(() => readJson(LS.inventory, []));
-    const [transactions, setTransactions] = useState(() => readJson(LS.transactions, []));
-    const [alerts, setAlerts] = useState(() => readJson(LS.alerts, []));
-    const [gasUrl, setGasUrl] = useState(() => localStorage.getItem(LS.gasUrl) || '');
-    const [syncToken, setSyncToken] = useState(() => localStorage.getItem(LS.syncToken) || '');
+    const [inventory, setInventory] = useState([]);
+    const [transactions, setTransactions] = useState([]);
+    const [alerts, setAlerts] = useState([]);
+    const [gasUrl, setGasUrl] = useState(() => { try { return localStorage.getItem(LS.gasUrl) || ''; } catch { return ''; } });
+    const [syncToken, setSyncToken] = useState(() => { try { return localStorage.getItem(LS.syncToken) || ''; } catch { return ''; } });
     const [connection, setConnection] = useState('offline');
     const [syncing, setSyncing] = useState(false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-    useEffect(() => localStorage.setItem(LS.inventory, JSON.stringify(inventory)), [inventory]);
-    useEffect(() => localStorage.setItem(LS.transactions, JSON.stringify(transactions)), [transactions]);
-    useEffect(() => localStorage.setItem(LS.alerts, JSON.stringify(alerts)), [alerts]);
-    useEffect(() => localStorage.setItem(LS.gasUrl, gasUrl), [gasUrl]);
-    useEffect(() => localStorage.setItem(LS.syncToken, syncToken), [syncToken]);
+    useEffect(() => { safeStorageSet(LS.gasUrl, gasUrl); }, [gasUrl]);
+    useEffect(() => { safeStorageSet(LS.syncToken, syncToken); }, [syncToken]);
     const applyBootstrap = useCallback((data) => {
         if (Array.isArray(data.inventory))
             setInventory(data.inventory);
@@ -207,7 +243,7 @@ function App() {
             if (options.queueOnFail) {
                 const queue = readJson(LS.queue, []);
                 queue.push({ id: uid('q'), action, payload, queuedAt: Date.now() });
-                localStorage.setItem(LS.queue, JSON.stringify(queue.slice(-500)));
+                safeStorageSet(LS.queue, JSON.stringify(compactForLocalCache(queue.slice(-100))));
                 toast('通信できないため端末に一時保存しました。', 'warn');
             }
             throw err;
@@ -244,7 +280,7 @@ function App() {
                 remaining.push(item);
             }
         }
-        localStorage.setItem(LS.queue, JSON.stringify(remaining));
+        safeStorageSet(LS.queue, JSON.stringify(compactForLocalCache(remaining.slice(-100))));
         if (remaining.length === 0)
             await pullFromSheet(true);
     }, [gasUrl, syncToken, pullFromSheet]);
@@ -717,7 +753,7 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
                 timestamp: Date.now(),
                 source: '商品バーコード'
             }].slice(-3000);
-        localStorage.setItem(LS.productScanHistory, JSON.stringify(nextHistory));
+        safeStorageSet(LS.productScanHistory, JSON.stringify(compactForLocalCache(nextHistory.slice(-1000))));
         setBarcode(code);
         setFound(p || null);
         if (!p)
@@ -1299,15 +1335,43 @@ if (typeof document !== 'undefined' && !document.getElementById('bakeru-v23-styl
   `;
     document.head.appendChild(style);
 }
+class BakeruErrorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { error: null, info: null };
+    }
+    static getDerivedStateFromError(error) {
+        return { error };
+    }
+    componentDidCatch(error, info) {
+        console.error('BAKERU render error:', error, info);
+        this.setState({ info });
+    }
+    componentDidMount() {
+        window.__BAKERU_RENDERED__ = true;
+    }
+    render() {
+        if (this.state.error) {
+            const msg = String(this.state.error && this.state.error.message ? this.state.error.message : this.state.error);
+            return React.createElement('div', {style:{maxWidth:'760px',margin:'36px auto',padding:'24px',fontFamily:'sans-serif',border:'2px solid #dc2626',borderRadius:'16px',background:'#fff'}},
+                React.createElement('h1',{style:{color:'#b91c1c',fontSize:'24px',fontWeight:'800'}},'BAKERUの画面描画でエラーが発生しました'),
+                React.createElement('p',{style:{marginTop:'14px'}},msg),
+                React.createElement('p',{style:{marginTop:'14px',color:'#475569'}},'この画面をそのまま撮影してチャッピーに送ってください。')
+            );
+        }
+        return this.props.children;
+    }
+}
+
 const rootElement = document.getElementById('root');
 try {
     if (!window.React || !window.ReactDOM)
         throw new Error('Reactライブラリを読み込めませんでした。');
+    const appTree = React.createElement(BakeruErrorBoundary, null, React.createElement(App, null));
     if (ReactDOM.createRoot)
-        ReactDOM.createRoot(rootElement).render(React.createElement(App, null));
+        ReactDOM.createRoot(rootElement).render(appTree);
     else
-        ReactDOM.render(React.createElement(App, null), rootElement);
-    window.__BAKERU_RENDERED__ = true;
+        ReactDOM.render(appTree, rootElement);
 }
 catch (err) {
     console.error('BAKERU startup error:', err);
@@ -1319,7 +1383,7 @@ catch (err) {
     setTimeout(function(){
       if(!window.__BAKERU_RENDERED__){
         var r=document.getElementById('root');
-        if(r && r.innerText.indexOf('起動中')!==-1) r.innerHTML='<div style="max-width:720px;margin:40px auto;padding:24px;font-family:sans-serif;border:2px solid #d97706;border-radius:16px;background:#fffbeb"><h2 style="color:#92400e">BAKERUの読み込みが完了しませんでした</h2><p>Reactライブラリを取得できていない可能性があります。ページを再読み込みしてください。</p></div>';
+        if(r && (r.innerText.indexOf('起動中')!==-1 || !r.innerText.trim())) r.innerHTML='<div style="max-width:720px;margin:40px auto;padding:24px;font-family:sans-serif;border:2px solid #d97706;border-radius:16px;background:#fffbeb"><h2 style="color:#92400e">BAKERUの読み込みが完了しませんでした</h2><p>Reactライブラリを取得できていない可能性があります。ページを再読み込みしてください。</p></div>';
       }
     },5000);
   </script>
