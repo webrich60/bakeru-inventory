@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.5</title>
-  <!-- BAKERU_BUILD: 2.7.5-qr-preview-brand -->
+  <title>BAKERU 商品・在庫管理 v2.7.6</title>
+  <!-- BAKERU_BUILD: 2.7.6-content-amount-input -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -66,7 +66,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.7.5
+  BAKERU 商品・在庫管理 v2.7.6
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -600,7 +600,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.5")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.6")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -837,7 +837,7 @@ function InventoryView({ inventory, saveProduct, onDelete }) {
 }
 function ProductForm({ product, onSave, onCancel }) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
-    const [f, setF] = useState({ ...product, purchaseUnit: product.purchaseUnit || product.unit || '個', purchaseFactor: Number(product.purchaseFactor || 1), contentAmount: Number(product.contentAmount || 0), contentUnit: product.contentUnit || 'g', details: product.details || '', shelf: product.shelf || '', warningStock: Number((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10)) });
+    const [f, setF] = useState({ ...product, purchaseUnit: product.purchaseUnit || product.unit || '個', purchaseFactor: Number(product.purchaseFactor || 1), contentAmount: String(product.contentAmount ?? 0), contentUnit: product.contentUnit || 'g', details: product.details || '', shelf: product.shelf || '', warningStock: Number((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10)) });
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
     const warning = Number(f.warningStock || 0);
     const critical = Number(f.minStock || 0);
@@ -854,7 +854,7 @@ function ProductForm({ product, onSave, onCancel }) {
             React.createElement(Field, { label: "カテゴリ" },
                 React.createElement("input", { value: f.category || '', onChange: e => set('category', e.target.value), className: "input" })),
             React.createElement(Field, { label: "内容量" },
-                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_b = f.contentAmount) !== null && _b !== void 0 ? _b : 0, onChange: e => set('contentAmount', Number(e.target.value)), className: "input", placeholder: "例: 500" })),
+                React.createElement("input", { type: "number", min: "0", step: "0.1", inputMode: "decimal", value: (_b = f.contentAmount) !== null && _b !== void 0 ? _b : '0', onFocus: e => setTimeout(() => e.target.select(), 0), onChange: e => set('contentAmount', e.target.value), onBlur: () => { if (String(f.contentAmount ?? '').trim() === '') set('contentAmount', '0'); }, className: "input", placeholder: "例: 500 / 0.5" })),
             React.createElement(Field, { label: "内容量の単位" },
                 React.createElement("select", { value: f.contentUnit || 'g', onChange: e => set('contentUnit', e.target.value), className: "input" }, CONTENT_UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
             React.createElement(Field, { label: "棚・保管場所" },
@@ -886,7 +886,7 @@ function ProductForm({ product, onSave, onCancel }) {
         warning <= critical && React.createElement("div", { className: "mt-3 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm font-bold" }, "注意ラインはレッドラインより大きい数にしてください。"),
         React.createElement("div", { className: "flex flex-col-reverse sm:flex-row justify-end gap-2 mt-5" },
             React.createElement("button", { onClick: onCancel, className: "px-5 py-2.5 rounded-xl bg-gray-100 font-bold" }, "キャンセル"),
-            React.createElement("button", { onClick: () => { if (!String(f.name || '').trim()) return toast('商品名を入力してください。', 'warn'); if (Number(f.warningStock || 0) <= Number(f.minStock || 0)) return toast('注意ラインはレッドラインより大きくしてください。', 'warn'); onSave(f); }, className: "px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2" },
+            React.createElement("button", { onClick: () => { if (!String(f.name || '').trim()) return toast('商品名を入力してください。', 'warn'); if (Number(f.warningStock || 0) <= Number(f.minStock || 0)) return toast('注意ラインはレッドラインより大きくしてください。', 'warn'); onSave({ ...f, contentAmount: Number(f.contentAmount || 0) }); }, className: "px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2" },
                 React.createElement(Save, { size: 18 }),
                 "保存")));
 }
@@ -1486,7 +1486,7 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
-// v2.7.5: QR preview before print, color controls, BAKERU branding badge, and print design improvements.
+// v2.7.6: Content amount supports direct manual typing and 0.1 spinner increments; QR preview/branding retained.
 let __bakeruTesseractLoader = null;
 let __bakeruOcrWorkerPromise = null;
 let __bakeruOcrProgressHandler = null;
