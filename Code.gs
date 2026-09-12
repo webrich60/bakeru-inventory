@@ -9,7 +9,7 @@
  *   SPREADSHEET_ID   setupBAKERU() が自動保存
  */
 
-const BAKERU_VERSION = '2.7.0-qr-inventory';
+const BAKERU_VERSION = '2.7.2-qr-center';
 
 const BAKERU_SHEETS = {
   settings: '00_設定',
