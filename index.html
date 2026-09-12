@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.2</title>
-  <!-- BAKERU_BUILD: 2.7.2-qr-center-label-print -->
+  <title>BAKERU 商品・在庫管理 v2.7.3</title>
+  <!-- BAKERU_BUILD: 2.7.3-standard-ocr-ai-assist -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -66,7 +66,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.7.2
+  BAKERU 商品・在庫管理 v2.7.3
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -600,7 +600,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.1")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.3")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -1286,35 +1286,228 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
+// v2.7.3: Standard OCR first, Gemini only for ambiguous OCR text.
+let __bakeruTesseractLoader = null;
+let __bakeruOcrWorkerPromise = null;
+let __bakeruOcrProgressHandler = null;
+function loadBakeruTesseract() {
+    if (window.Tesseract) return Promise.resolve(window.Tesseract);
+    if (__bakeruTesseractLoader) return __bakeruTesseractLoader;
+    __bakeruTesseractLoader = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+        s.async = true;
+        s.onload = () => window.Tesseract ? resolve(window.Tesseract) : reject(new Error('標準OCRライブラリを読み込めませんでした。'));
+        s.onerror = () => reject(new Error('標準OCRライブラリの読み込みに失敗しました。通信状態を確認してください。'));
+        document.head.appendChild(s);
+    });
+    return __bakeruTesseractLoader;
+}
+async function getBakeruOcrWorker() {
+    const T = await loadBakeruTesseract();
+    if (!__bakeruOcrWorkerPromise) {
+        __bakeruOcrWorkerPromise = T.createWorker('jpn+eng', T.OEM.LSTM_ONLY, {
+            logger: m => { if (__bakeruOcrProgressHandler) __bakeruOcrProgressHandler(m); }
+        }).catch(err => { __bakeruOcrWorkerPromise = null; throw err; });
+    }
+    return __bakeruOcrWorkerPromise;
+}
+async function standardReceiptOcr(imageDataUrl, onProgress) {
+    __bakeruOcrProgressHandler = onProgress || null;
+    try {
+        const worker = await getBakeruOcrWorker();
+        const out = await worker.recognize(imageDataUrl);
+        const data = out && out.data ? out.data : {};
+        return { text: String(data.text || ''), confidence: Number(data.confidence || 0) };
+    } finally {
+        __bakeruOcrProgressHandler = null;
+    }
+}
+function nfkcText(v) {
+    try { return String(v || '').normalize('NFKC'); } catch (_) { return String(v || ''); }
+}
+function receiptLineClean(v) {
+    return nfkcText(v).replace(/[\t\u00a0]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+}
+function receiptMoney(v) {
+    const m = nfkcText(v).replace(/[¥￥円,\s]/g, '').match(/-?\d+(?:\.\d+)?/);
+    return m ? Math.max(0, Number(m[0]) || 0) : 0;
+}
+function receiptDateFromText(text) {
+    const s = nfkcText(text);
+    const m = s.match(/(20\d{2})\s*[\/\.\-年]\s*(\d{1,2})\s*[\/\.\-月]\s*(\d{1,2})\s*日?/);
+    if (!m) return '';
+    return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+}
+function receiptNameKey(v) {
+    return nfkcText(v).toLowerCase().replace(/[\s　\-‐―ー・\/\\()（）\[\]【】「」『』,，.。:：*＊#＃]/g, '');
+}
+function diceScore(a, b) {
+    a = receiptNameKey(a); b = receiptNameKey(b);
+    if (!a || !b) return 0;
+    if (a === b) return 1;
+    if (a.length >= 4 && b.length >= 4 && (a.includes(b) || b.includes(a))) return Math.min(a.length,b.length) / Math.max(a.length,b.length) + 0.15;
+    if (a.length < 2 || b.length < 2) return 0;
+    const grams = s => { const x=[]; for(let i=0;i<s.length-1;i++) x.push(s.slice(i,i+2)); return x; };
+    const aa=grams(a), bb=grams(b), used=new Array(bb.length).fill(false); let hit=0;
+    aa.forEach(g => { const i=bb.findIndex((x,j)=>!used[j] && x===g); if(i>=0){used[i]=true; hit++;} });
+    return (2*hit)/(aa.length+bb.length);
+}
+function bestInventoryMatch(inventory, name) {
+    let best = null, bestScore = 0;
+    (inventory || []).forEach(p => {
+        const names = [p.name, ...String(p.aliases || '').split(',').map(x=>x.trim()).filter(Boolean)];
+        names.forEach(n => {
+            const score = diceScore(name, n);
+            if (score > bestScore) { bestScore = score; best = p; }
+        });
+    });
+    return bestScore >= 0.82 ? { product: best, score: bestScore } : { product: null, score: bestScore };
+}
+function parseReceiptTextRules(rawText, inventory) {
+    const raw = nfkcText(rawText).replace(/\r/g, '');
+    const lines = raw.split('\n').map(receiptLineClean).filter(Boolean);
+    const date = receiptDateFromText(raw);
+    const totalWords = /(総合計|合計金額|お支払|支払合計|お買上合計|合計|total)/i;
+    const noiseWords = /(小計|消費税|税率|内税|外税|課税|非課税|対象額|値引|割引|お預|預り|釣銭|お釣|現金|クレジット|カード|電子マネー|ポイント|電話|tel|登録番号|インボイス|領収書|レシート|納品書|ありがとうございました)/i;
+    let total = 0;
+    lines.forEach(line => {
+        if (!totalWords.test(line)) return;
+        const nums = line.match(/[¥￥]?\s*\d[\d,]*(?:\.\d+)?\s*円?/g) || [];
+        if (nums.length) total = Math.max(total, receiptMoney(nums[nums.length - 1]));
+    });
+    let vendor = '';
+    for (const line of lines.slice(0, 10)) {
+        if (line.length < 2 || line.length > 48) continue;
+        if (receiptDateFromText(line) || /\d{2,4}[-ー]\d{2,4}[-ー]\d{3,4}/.test(line) || /^(〒|tel|電話)/i.test(line)) continue;
+        if (totalWords.test(line) || noiseWords.test(line)) continue;
+        if (/^[\d\s¥￥,.:/\-]+$/.test(line)) continue;
+        vendor = line.replace(/^[*＊#＃\s]+|[*＊#＃\s]+$/g,'');
+        if (vendor) break;
+    }
+    const items = [];
+    lines.forEach(line0 => {
+        let line = line0;
+        if (noiseWords.test(line) || totalWords.test(line) || receiptDateFromText(line)) return;
+        if (/^(〒|tel|電話|No\.?|レジ|担当|時刻|店番)/i.test(line)) return;
+        const tail = line.match(/(?:¥|￥)?\s*(\d[\d,]{1,9})\s*円?\s*$/);
+        if (!tail) return;
+        const amount = receiptMoney(tail[1]);
+        if (amount < 10) return;
+        let body = line.slice(0, tail.index).trim();
+        if (!body || /^[\d\s¥￥,.:/\-]+$/.test(body)) return;
+        let quantity = 1, unitPrice = amount;
+        let m = body.match(/(?:x|X|×)\s*(\d{1,3})\s*(?:@|×)?\s*(\d[\d,]{1,9})?\s*$/);
+        if (m) {
+            quantity = Math.max(1, Number(m[1]) || 1);
+            if (m[2]) unitPrice = receiptMoney(m[2]);
+            body = body.slice(0, m.index).trim();
+        } else {
+            m = body.match(/\s(\d{1,3})\s+(\d[\d,]{1,9})\s*$/);
+            if (m) {
+                const q = Number(m[1]) || 0, u = receiptMoney(m[2]);
+                if (q > 0 && q <= 100 && u > 0 && Math.abs(q * u - amount) <= Math.max(2, amount * 0.03)) {
+                    quantity = q; unitPrice = u; body = body.slice(0, m.index).trim();
+                }
+            } else {
+                m = body.match(/(?:^|\s)(\d{1,3})\s*(個|点|本|袋|箱|枚|パック|pk|p)\s*$/i);
+                if (m) { quantity = Math.max(1, Number(m[1]) || 1); body = body.slice(0, m.index).trim(); unitPrice = Math.round(amount / quantity); }
+            }
+        }
+        body = body.replace(/^[*＊#＃・\s]+|[*＊#＃・\s]+$/g,'').replace(/\s+[A-Z]$/i,'').trim();
+        if (body.length < 2) return;
+        const match = bestInventoryMatch(inventory, body);
+        const p = match.product;
+        items.push({
+            name: body, quantity, unitPrice, amount,
+            productId: p ? p.id : '', barcode: p ? (p.barcode || '') : '',
+            matchScore: match.score
+        });
+    });
+    const unmatched = items.filter(x => !x.productId).length;
+    const needsAi = items.length === 0 || unmatched > 0 || !date || !total;
+    return { vendor, date, total, items, needsAi, unmatched, lineCount: lines.length };
+}
+function attachReceiptInventory(items, inventory) {
+    return (items || []).map((x, i) => {
+        const match = bestInventoryMatch(inventory, x.name || '');
+        const p = match.product || inventory.find(q => q.id === x.productId);
+        return { ...x, rowId: `r${i}`, productId: p ? p.id : (x.productId || ''), barcode: p ? (p.barcode || '') : (x.barcode || ''), matchScore: match.score || x.matchScore || 0 };
+    });
+}
+
 function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions, setAlerts, pullFromSheet }) {
     var _a, _b;
     const fileRef = useRef(null);
     const [preview, setPreview] = useState('');
     const [reading, setReading] = useState(false);
+    const [readStage, setReadStage] = useState('');
+    const [ocrProgress, setOcrProgress] = useState(0);
     const [receipt, setReceipt] = useState(null);
     const [scanned, setScanned] = useState({});
     const [lastCode, setLastCode] = useState('');
     const [committing, setCommitting] = useState(false);
     const readReceipt = async (file) => {
         setReading(true);
+        setReadStage('標準OCRを準備中...');
+        setOcrProgress(0);
         setReceipt(null);
         setScanned({});
         try {
-            const image = await compressImageFile(file);
+            const image = await compressImageFile(file, 1800, 0.9);
             setPreview(image);
-            const result = await api('geminiReceiptOcr', { image });
-            const d = result.data || {};
-            const items = (d.items || []).map((x, i) => {
-                const exact = inventory.find(p => [p.name, ...(String(p.aliases || '').split(',').filter(Boolean))].some(n => normalizeText(n) === normalizeText(x.name)));
-                return { ...x, rowId: `r${i}`, productId: (exact === null || exact === void 0 ? void 0 : exact.id) || '', barcode: (exact === null || exact === void 0 ? void 0 : exact.barcode) || '' };
+            const ocr = await standardReceiptOcr(image, m => {
+                if (m && m.status === 'recognizing text') {
+                    const pct = Math.max(0, Math.min(100, Math.round(Number(m.progress || 0) * 100)));
+                    setOcrProgress(pct);
+                    setReadStage(`標準OCRで文字を読取中... ${pct}%`);
+                } else if (m && m.status) {
+                    setReadStage('標準OCRを準備中...');
+                }
             });
-            setReceipt({ ...d, items });
+            setReadStage('日付・金額・商品をルール整理中...');
+            const parsed = parseReceiptTextRules(ocr.text, inventory);
+            let d = {
+                receiptId: uid('receipt'), vendor: parsed.vendor || '', date: parsed.date || '', total: parsed.total || 0,
+                items: parsed.items || [],
+                ocrMeta: { engine: 'standard', confidence: ocr.confidence, aiUsed: false, rawText: ocr.text || '', needsAi: parsed.needsAi }
+            };
+            if (parsed.needsAi) {
+                try {
+                    const ping = await api('ping');
+                    if (ping && ping.data && ping.data.geminiConfigured) {
+                        setReadStage('判定が難しい部分だけAIで整理中...');
+                        const assist = await api('geminiReceiptTextAssist', {
+                            text: ocr.text || '',
+                            parsed: { vendor:d.vendor, date:d.date, total:d.total, items:d.items.map(x => ({name:x.name,quantity:x.quantity,unitPrice:x.unitPrice,amount:x.amount})) }
+                        });
+                        const a = (assist && assist.data) || {};
+                        d = {
+                            ...d,
+                            vendor: a.vendor || d.vendor,
+                            date: a.date || d.date,
+                            total: Number(a.total || d.total || 0),
+                            items: Array.isArray(a.items) && a.items.length ? a.items : d.items,
+                            ocrMeta: { ...d.ocrMeta, aiUsed: true }
+                        };
+                    }
+                } catch (assistErr) {
+                    console.warn('BAKERU AI OCR assist skipped:', assistErr);
+                }
+            }
+            d.items = attachReceiptInventory(d.items, inventory);
+            setReceipt(d);
+            const stillUnmatched = d.items.filter(x => !x.productId).length;
+            if (d.ocrMeta.aiUsed) toast('標準OCR＋必要部分だけAI補正で読み取りました。');
+            else if (stillUnmatched) toast(`標準OCRで読み取りました。未紐付け ${stillUnmatched}件を確認してください。`, 'warn');
+            else toast('標準OCRだけで読み取り・商品照合できました。');
         }
         catch (e) {
             toast(e.message, 'error');
         }
         finally {
             setReading(false);
+            setReadStage('');
         }
     };
     const mapItem = (rowId, productId) => {
@@ -1333,6 +1526,12 @@ function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions,
                 }
                 return next;
             }) }));
+    };
+    const addReceiptItem = () => {
+        setReceipt(r => ({ ...r, items: [...(r.items || []), { rowId: uid('r'), name:'', quantity:1, unitPrice:0, amount:0, productId:'', barcode:'' }] }));
+    };
+    const removeReceiptItem = (rowId) => {
+        setReceipt(r => ({ ...r, items: (r.items || []).filter(x => x.rowId !== rowId) }));
     };
     const onBarcode = (code) => {
         setLastCode(code);
@@ -1403,14 +1602,15 @@ function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions,
             React.createElement("div", { className: "flex flex-col lg:flex-row gap-5" },
                 React.createElement("div", { className: "flex-1" },
                     React.createElement("h3", { className: "font-extrabold text-lg" }, "\u2460 \u9818\u53CE\u66F8\u30FB\u7D0D\u54C1\u66F8\u3092OCR"),
-                    React.createElement("p", { className: "text-sm text-gray-600 mt-1" }, "\u5546\u54C1\u540D\u30FB\u6570\u91CF\u30FB\u5358\u4FA1\u30FB\u5408\u8A08\u3092Gemini\u3067\u8AAD\u307F\u53D6\u308A\u3001\u5546\u54C1\u30DE\u30B9\u30BF\u3068\u7167\u5408\u3057\u307E\u3059\u3002"),
+                    React.createElement("p", { className: "text-sm text-gray-600 mt-1" }, "標準OCR（AI不要）で文字を読み、日付・金額をルール整理して商品マスタと照合します。判断が難しい時だけ、Gemini設定済みならOCR済み文字だけをAI補正します。領収書画像はGeminiへ送りません。"),
+                    React.createElement("p", { className: "text-xs text-amber-700 mt-2 font-bold" }, "初回だけ日本語OCR辞書の準備に時間がかかる場合があります。2回目以降は同じ端末では軽くなります。"),
                     React.createElement("input", { ref: fileRef, type: "file", accept: "image/*", capture: "environment", className: "hidden", onChange: e => e.target.files[0] && readReceipt(e.target.files[0]) }),
                     React.createElement("button", { onClick: () => { var _a; return (_a = fileRef.current) === null || _a === void 0 ? void 0 : _a.click(); }, className: "mt-4 w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 text-white font-extrabold flex items-center justify-center gap-2" },
                         React.createElement(Camera, null),
                         "\u9818\u53CE\u66F8\u3092\u64AE\u5F71\u30FB\u9078\u629E"),
                     reading && React.createElement("div", { className: "mt-3 font-bold text-emerald-700 flex items-center gap-2" },
                         React.createElement(RefreshCw, { className: "animate-spin", size: 18 }),
-                        "OCR\u89E3\u6790\u4E2D...")),
+                        readStage || `標準OCR読取中... ${ocrProgress ? ocrProgress + "%" : ""}`)),
                 preview && React.createElement("img", { src: preview, className: "w-full lg:w-64 max-h-56 object-contain rounded-xl border bg-gray-50" }))),
         receipt && React.createElement(React.Fragment, null,
             React.createElement(Card, { className: "p-5" },
@@ -1418,6 +1618,12 @@ function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions,
                 React.createElement("div", { className: "p-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900 mb-4" },
                     React.createElement("b", null, "\u91CD\u8981\uFF1A"),
                     "OCR\u306F\u81EA\u52D5\u8AAD\u53D6\u306A\u306E\u3067\u3001\u78BA\u5B9A\u524D\u306B\u5546\u54C1\u540D\u30FB\u6570\u91CF\u30FB\u5358\u4FA1\u3092\u76EE\u8996\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u8AA4\u8AAD\u304C\u3042\u308C\u3070\u3053\u306E\u753B\u9762\u3067\u4FEE\u6B63\u3067\u304D\u307E\u3059\u3002"),
+                receipt.ocrMeta && React.createElement("div", { className: `mb-4 p-3 rounded-xl border text-sm font-bold ${receipt.ocrMeta.aiUsed ? 'bg-violet-50 border-violet-200 text-violet-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}` },
+                    receipt.ocrMeta.aiUsed ? '読取方式：標準OCR + 必要部分のみGemini文字補正' : '読取方式：標準OCRのみ（Gemini未使用）',
+                    React.createElement("span", { className: "ml-2 font-normal" }, `OCR信頼度 ${Math.round(Number(receipt.ocrMeta.confidence || 0))}%`)),
+                receipt.ocrMeta && receipt.ocrMeta.rawText && React.createElement("details", { className: "mb-4 rounded-xl border border-gray-200 bg-gray-50 p-3" },
+                    React.createElement("summary", { className: "font-bold cursor-pointer" }, "OCRの生テキストを確認"),
+                    React.createElement("pre", { className: "mt-3 whitespace-pre-wrap text-xs leading-5 max-h-56 overflow-auto" }, receipt.ocrMeta.rawText)),
                 React.createElement("div", { className: "grid sm:grid-cols-3 gap-3 mb-4" },
                     React.createElement(Field, { label: "\u4ED5\u5165\u5148" },
                         React.createElement("input", { className: "input", value: receipt.vendor || '', onChange: e => setReceipt(r => ({ ...r, vendor: e.target.value })) })),
@@ -1440,9 +1646,12 @@ function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions,
                                     p.name,
                                     " / ",
                                     p.barcode || 'コード未登録'))))),
-                    React.createElement("div", { className: "text-xs text-gray-600 mt-2" },
-                        "\u884C\u91D1\u984D: ",
-                        React.createElement("b", null, yen((_d = x.amount) !== null && _d !== void 0 ? _d : (Number(x.quantity || 1) * Number(x.unitPrice || x.price || 0)))))); }))),
+                    React.createElement("div", { className: "flex items-center justify-between gap-3 mt-2" },
+                        React.createElement("div", { className: "text-xs text-gray-600" },
+                            "行金額: ",
+                            React.createElement("b", null, yen((_d = x.amount) !== null && _d !== void 0 ? _d : (Number(x.quantity || 1) * Number(x.unitPrice || x.price || 0))))),
+                        React.createElement("button", { type:"button", onClick: () => removeReceiptItem(x.rowId), className:"text-xs font-bold text-red-700 px-2 py-1 rounded border border-red-200 bg-white" }, "この行を削除"))); })),
+                React.createElement("button", { type:"button", onClick:addReceiptItem, className:"mt-3 px-4 py-2 rounded-lg border-2 border-dashed border-gray-300 bg-white font-bold text-gray-700" }, "+ 明細行を手動追加")),
             React.createElement(Card, { className: "p-5" },
                 React.createElement("h3", { className: "font-extrabold text-lg" }, "\u2462 \u5B9F\u7269\u3092\u30D0\u30FC\u30B3\u30FC\u30C9\u691C\u54C1"),
                 React.createElement("p", { className: "text-sm text-gray-600 mt-1 mb-4" }, "\u7D0D\u54C1\u3055\u308C\u305F\u5546\u54C1\u3092\u30B9\u30AD\u30E3\u30F3\u3059\u308B\u305F\u3073\u306B\u5B9F\u6570\u304C+1\u3055\u308C\u3001\u9818\u53CE\u66F8\u6570\u91CF\u3068\u81EA\u52D5\u6BD4\u8F03\u3057\u307E\u3059\u3002"),
