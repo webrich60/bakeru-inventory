@@ -7,12 +7,13 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.6.7</title>
-  <!-- BAKERU_BUILD: 2.6.7-step3-test-mode-switch -->
+  <title>BAKERU 商品・在庫管理 v2.7.1</title>
+  <!-- BAKERU_BUILD: 2.7.0-qr-inventory-labels -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
   <style>
     html,body,#root{min-height:100%;margin:0}body{background:#f9fafb;color:#111827}*{box-sizing:border-box}button,input,select,textarea{font:inherit}
     #boot{max-width:520px;margin:18vh auto;padding:28px;font-family:system-ui,-apple-system,sans-serif;text-align:center;color:#374151}
@@ -60,12 +61,12 @@ const ICON_MAP = {
     RefreshCw: 'rotate', Download: 'download', Database: 'database', Wifi: 'wifi', WifiOff: 'ban',
     ClipboardCheck: 'clipboard-check', Barcode: 'barcode', Save: 'floppy-disk', FileSpreadsheet: 'table',
     Link2: 'link', Menu: 'bars', X: 'xmark', Trash2: 'trash', RotateCcw: 'rotate-left', Check: 'check',
-    Minus: 'minus', PlusCircle: 'circle-plus', Cloud: 'cloud', CloudOff: 'cloud'
+    Minus: 'minus', PlusCircle: 'circle-plus', Cloud: 'cloud', CloudOff: 'cloud', QrCode: 'qrcode', Printer: 'print', Tag: 'tag'
 };
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
-const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff');
+const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.6.7
+  BAKERU 商品・在庫管理 v2.7.1
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -164,6 +165,41 @@ const normalizeText = (s = '') => String(s)
     .toLowerCase()
     .replace(/[\s　()（）・\-_/]/g, '');
 const UNIT_OPTIONS = ['個', 'g', 'kg', 'ml', 'L', '本', '枚', '袋', '箱', 'ケース'];
+const CONTENT_UNIT_OPTIONS = ['g', 'kg', 'ml', 'L', '個', '本', '枚', '袋', '箱', 'ケース'];
+const BAKERU_QR_PREFIX = 'BAKERU:P:';
+const makeProductQrPayload = (product) => `${BAKERU_QR_PREFIX}${encodeURIComponent(String(product && product.id || ''))}`;
+const parseBakeruProductQr = (raw) => {
+    const code = String(raw || '').trim();
+    if (!code.startsWith(BAKERU_QR_PREFIX)) return null;
+    try { return { type: 'product', productId: decodeURIComponent(code.slice(BAKERU_QR_PREFIX.length)) }; }
+    catch { return { type: 'product', productId: code.slice(BAKERU_QR_PREFIX.length) }; }
+};
+const findProductByCode = (inventory, raw) => {
+    const code = String(raw || '').trim();
+    const qr = parseBakeruProductQr(code);
+    if (qr && qr.productId) return inventory.find(x => String(x.id) === String(qr.productId)) || null;
+    return inventory.find(x => String(x.barcode || '') === code || String(x.sku || '') === code) || null;
+};
+const productContentText = (p) => {
+    const n = Number(p && p.contentAmount);
+    if (Number.isFinite(n) && n > 0) return `${n}${p.contentUnit || p.unit || ''}`;
+    if (p && p.purchaseFactor && p.unit) return `${p.purchaseFactor}${p.unit}`;
+    return '未設定';
+};
+const makeQrDataUrl = (payload, cellSize = 8, margin = 4) => {
+    if (!window.qrcode) return '';
+    try {
+        const qr = window.qrcode(0, 'M');
+        qr.addData(String(payload || ''));
+        qr.make();
+        return qr.createDataURL(cellSize, margin);
+    } catch (e) {
+        console.error('QR生成失敗', e);
+        return '';
+    }
+};
+const escapeHtml = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
 const getCriticalStock = (x) => { var _a; return Number((_a = x === null || x === void 0 ? void 0 : x.minStock) !== null && _a !== void 0 ? _a : 0); };
 const getWarningStock = (x) => {
     const critical = getCriticalStock(x);
@@ -180,6 +216,9 @@ const stockStage = (x) => {
         return 'warning';
     return 'ok';
 };
+const movementLabel = (type) => type === 'sale' ? '販売' : type === 'use' ? '使用' : type === 'out' ? '出庫' : '入庫';
+const movementIsOut = (type) => ['out','sale','use'].includes(String(type || ''));
+const stageLabel = (stage) => stage === 'critical' ? 'レッド' : stage === 'warning' ? '注意' : '適正';
 const compatibleUnitChoices = (product) => {
     if (!product) return [];
     const baseUnit = String(product.unit || '個');
@@ -451,7 +490,7 @@ function App() {
         }
         catch { /* queued */ }
     };
-    const recordMovement = async ({ productId, type, quantity, inputUnit, unitPrice = 0, source = '手入力', note = '' }) => {
+    const recordMovement = async ({ productId, type, quantity, inputUnit, unitPrice = null, source = '手入力', note = '' }) => {
         var _a, _b;
         const product = inventory.find(x => x.id === productId);
         if (!product)
@@ -462,13 +501,14 @@ function App() {
         const useUnit = inputUnit || product.unit || '個';
         const factor = movementFactor(product, useUnit);
         const baseQty = Math.round(qty * factor * 1000) / 1000;
-        const delta = type === 'out' ? -baseQty : baseQty;
-        if ((Number(product.stock || 0) + delta) < -0.000001 && type === 'out')
-            throw new Error(`在庫を超えて出庫できません。現在庫 ${product.stock} ${product.unit || '個'}`);
+        const isOut = movementIsOut(type);
+        const delta = isOut ? -baseQty : baseQty;
+        if ((Number(product.stock || 0) + delta) < -0.000001 && isOut)
+            throw new Error(`在庫を超えて${movementLabel(type)}できません。現在庫 ${product.stock} ${product.unit || '個'}`);
         const tx = {
             id: uid('tx'), productId, productName: product.name, barcode: product.barcode || '',
             type, quantity: baseQty, inputQuantity: qty, inputUnit: useUnit, conversionFactor: factor, baseUnit: product.unit || '個',
-            unitPrice: Number(unitPrice || 0), source, note, timestamp: Date.now()
+            unitPrice: Number(unitPrice != null ? unitPrice : (type === 'sale' ? product.price : product.cost) || 0), source, note, timestamp: Date.now()
         };
         setTransactions(prev => [tx, ...prev]);
         setInventory(prev => prev.map(x => x.id === productId ? { ...x, stock: Math.round((Number(x.stock || 0) + delta) * 1000) / 1000, updatedAt: Date.now() } : x));
@@ -558,7 +598,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.6.7")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.1")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -602,6 +642,9 @@ function DashboardView({ inventory, transactions, alerts, api, setAlerts }) {
             React.createElement(Stat, { title: "\u7DCF\u5728\u5EAB\u6570", value: `${totalStock.toLocaleString()} 点`, icon: React.createElement(ShoppingCart, { className: "text-emerald-600" }) }),
             React.createElement(Stat, { title: "\u5728\u5EAB\u539F\u4FA1", value: yen(stockValue), icon: React.createElement(Database, { className: "text-violet-600" }) }),
             React.createElement(Stat, { title: "\u8981\u78BA\u8A8D", value: `${activeAlerts.length} 件`, icon: React.createElement(AlertTriangle, { className: activeAlerts.length ? 'text-red-600' : 'text-gray-400' }), warn: activeAlerts.length > 0 })),
+        React.createElement("div", { className: "grid grid-cols-2 gap-3" },
+            React.createElement("div", { className: "p-3 rounded-xl border-2 border-amber-300 bg-amber-50 font-black text-amber-900" }, `🟡 注意在庫 ${inventory.filter(x => stockStage(x) === 'warning').length} 品`),
+            React.createElement("div", { className: "p-3 rounded-xl border-2 border-red-300 bg-red-50 font-black text-red-900" }, `🔴 レッド在庫 ${inventory.filter(x => stockStage(x) === 'critical').length} 品`)),
         React.createElement("div", { className: "grid lg:grid-cols-2 gap-5" },
             React.createElement(Card, { className: "p-5" },
                 React.createElement("h3", { className: "font-extrabold text-lg flex items-center gap-2 mb-4" },
@@ -654,10 +697,10 @@ function DashboardView({ inventory, transactions, alerts, api, setAlerts }) {
             React.createElement("div", { className: "space-y-2" },
                 transactions.slice(0, 8).map(t => React.createElement("div", { key: t.id, className: "grid grid-cols-[1fr_auto] md:grid-cols-[160px_100px_1fr_100px] gap-2 items-center border-b border-gray-100 py-2 text-sm" },
                     React.createElement("span", { className: "hidden md:block text-gray-500" }, new Date(t.timestamp).toLocaleString('ja-JP')),
-                    React.createElement("span", { className: `font-bold ${t.type === 'out' || t.type === 'sale' ? 'text-orange-700' : 'text-blue-700'}` }, t.type === 'out' || t.type === 'sale' ? '出庫' : '入庫'),
+                    React.createElement("span", { className: `font-bold ${movementIsOut(t.type) ? 'text-orange-700' : 'text-blue-700'}` }, movementLabel(t.type)),
                     React.createElement("span", { className: "font-semibold truncate" }, t.productName),
                     React.createElement("span", { className: "font-black text-right" },
-                        t.type === 'out' || t.type === 'sale' ? '-' : '+',
+                        movementIsOut(t.type) ? '-' : '+',
                         t.quantity))),
                 !transactions.length && React.createElement(Empty, { text: "\u5165\u51FA\u5EAB\u5C65\u6B74\u306F\u307E\u3060\u3042\u308A\u307E\u305B\u3093\u3002" }))));
 }
@@ -673,119 +716,184 @@ function Empty({ text }) { return React.createElement("div", { className: "py-8 
 function InventoryView({ inventory, saveProduct, onDelete }) {
     const [search, setSearch] = useState('');
     const [editing, setEditing] = useState(null);
-    const filtered = inventory.filter(x => normalizeText(x.name).includes(normalizeText(search)) || String(x.barcode || '').includes(search) || String(x.sku || '').includes(search));
-    const newProduct = () => setEditing({ id: '', sku: '', barcode: '', name: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' });
+    const [qrProduct, setQrProduct] = useState(null);
+    const filtered = inventory.filter(x =>
+        normalizeText(x.name).includes(normalizeText(search)) ||
+        String(x.barcode || '').includes(search) || String(x.sku || '').includes(search) ||
+        normalizeText(x.details || '').includes(normalizeText(search)) || normalizeText(x.shelf || '').includes(normalizeText(search))
+    );
+    const newProduct = () => setEditing({ id: '', sku: '', barcode: '', name: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, contentAmount: 0, contentUnit: 'g', details: '', shelf: '', stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' });
+    const desktopRows = filtered.map(x => React.createElement("tr", { key: x.id, className: "hover:bg-gray-50" },
+        React.createElement(Td, null,
+            React.createElement("div", { className: "font-bold" }, x.name),
+            React.createElement("div", { className: "text-xs text-gray-500" }, x.sku || x.id)),
+        React.createElement(Td, null, React.createElement("span", { className: "font-mono" }, x.barcode || '未登録')),
+        React.createElement(Td, null,
+            React.createElement("div", { className: "font-bold" }, productContentText(x)),
+            React.createElement("div", { className: "text-xs text-gray-500" }, x.shelf ? `棚: ${x.shelf}` : (x.details || '詳細未設定'))),
+        React.createElement(Td, null, React.createElement(StockBadge, { x })),
+        React.createElement(Td, null,
+            React.createElement("div", { className: "text-amber-700 font-bold" }, "注意 ", getWarningStock(x)),
+            React.createElement("div", { className: "text-red-700 font-black" }, "レッド ", getCriticalStock(x))),
+        React.createElement(Td, null, yen(x.cost)),
+        React.createElement(Td, null, yen(x.price)),
+        React.createElement(Td, null,
+            React.createElement("div", { className: "flex flex-wrap gap-2" },
+                React.createElement("button", { onClick: () => setQrProduct(x), className: "px-2 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 font-black flex items-center gap-1" }, React.createElement(QrCode, { size: 16 }), "QR"),
+                React.createElement("button", { onClick: () => setEditing({ ...x }), className: "text-blue-700 font-bold" }, "編集"),
+                React.createElement("button", { onClick: () => { if (confirm(`${x.name}を無効化しますか？`)) onDelete(x.id); }, className: "text-red-600" }, React.createElement(Trash2, { size: 17 }))))
+    ));
+    const mobileRows = filtered.map(x => React.createElement("div", { key: x.id, className: "p-4" },
+        React.createElement("div", { className: "flex justify-between gap-3" },
+            React.createElement("div", { className: "min-w-0" },
+                React.createElement("div", { className: "font-extrabold text-base" }, x.name),
+                React.createElement("div", { className: "text-xs text-gray-500 mt-1" }, "SKU: ", x.sku || '-', " / JAN: ", x.barcode || '-'),
+                React.createElement("div", { className: "text-sm font-bold mt-1" }, productContentText(x), x.shelf ? ` / 棚 ${x.shelf}` : '')),
+            React.createElement(StockBadge, { x })),
+        x.details && React.createElement("div", { className: "mt-2 text-sm text-gray-700" }, x.details),
+        React.createElement("div", { className: "grid grid-cols-3 gap-2 mt-3 text-xs" },
+            React.createElement(Mini, { label: "注意 / レッド", value: `${getWarningStock(x)} / ${getCriticalStock(x)}` }),
+            React.createElement(Mini, { label: "仕入", value: yen(x.cost) }),
+            React.createElement(Mini, { label: "販売", value: yen(x.price) })),
+        React.createElement("div", { className: "grid grid-cols-2 gap-2 mt-3" },
+            React.createElement("button", { onClick: () => setQrProduct(x), className: "py-2.5 rounded-lg bg-emerald-600 text-white font-black flex items-center justify-center gap-2" }, React.createElement(QrCode, { size: 18 }), "QR作成"),
+            React.createElement("button", { onClick: () => setEditing({ ...x }), className: "py-2.5 rounded-lg bg-gray-100 font-bold" }, "編集"))
+    ));
     return React.createElement("div", { className: "space-y-4" },
         React.createElement("div", { className: "flex flex-col md:flex-row gap-3 justify-between" },
             React.createElement("div", { className: "relative flex-1 max-w-xl" },
                 React.createElement(Search, { className: "absolute left-3 top-3 text-gray-400", size: 20 }),
-                React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "\u5546\u54C1\u540D\u30FBSKU\u30FBJAN\u30B3\u30FC\u30C9\u3067\u691C\u7D22", className: "w-full pl-10 pr-4 py-2.5 rounded-xl border-2 border-gray-300 focus:border-blue-600 outline-none" })),
-            React.createElement("button", { onClick: newProduct, className: "bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl flex items-center justify-center gap-2" },
-                React.createElement(Plus, { size: 19 }),
-                "\u5546\u54C1\u767B\u9332")),
-        editing && React.createElement(ProductForm, { product: editing, onCancel: () => setEditing(null), onSave: async (p) => { await saveProduct(p); setEditing(null); toast('商品マスタを保存しました。'); } }),
+                React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "商品名・SKU・JAN・特徴・棚で検索", className: "w-full pl-10 pr-4 py-2.5 rounded-xl border-2 border-gray-300 focus:border-blue-600 outline-none" })),
+            React.createElement("button", { onClick: newProduct, className: "bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl flex items-center justify-center gap-2" }, React.createElement(Plus, { size: 19 }), "商品登録")),
+        React.createElement("div", { className: "p-3 rounded-xl bg-emerald-50 border-2 border-emerald-200 text-sm text-emerald-900" },
+            React.createElement("b", null, "QR運用: "),
+            "バーコードがない商品は、登録後にBAKERU専用QRを作成できます。商品貼付・棚貼付・ラミネート入出庫カードの3種類を同じ商品IDで利用できます。"),
+        editing && React.createElement(ProductForm, { product: editing, onCancel: () => setEditing(null), onSave: async (p) => { const saved = await saveProduct(p); setEditing(null); setQrProduct(saved); toast('商品マスタを保存しました。QRを作成できます。'); } }),
+        qrProduct && React.createElement(ProductQrManager, { product: qrProduct, onClose: () => setQrProduct(null) }),
         React.createElement(Card, { className: "overflow-hidden" },
             React.createElement("div", { className: "hidden md:block overflow-x-auto" },
-                React.createElement("table", { className: "w-full text-sm min-w-[880px]" },
+                React.createElement("table", { className: "w-full text-sm min-w-[980px]" },
                     React.createElement("thead", { className: "bg-gray-100 border-b-2 border-gray-200" },
                         React.createElement("tr", null,
-                            React.createElement(Th, null, "\u5546\u54C1 / SKU"),
-                            React.createElement(Th, null, "JAN\u30FB\u30D0\u30FC\u30B3\u30FC\u30C9"),
-                            React.createElement(Th, null, "\u73FE\u5728\u5EAB"),
-                            React.createElement(Th, null, "\u6CE8\u610F / \u30EC\u30C3\u30C9"),
-                            React.createElement(Th, null, "\u4ED5\u5165\u5358\u4FA1"),
-                            React.createElement(Th, null, "\u8CA9\u58F2\u5358\u4FA1"),
-                            React.createElement(Th, null, "\u64CD\u4F5C"))),
-                    React.createElement("tbody", { className: "divide-y divide-gray-200" }, filtered.map(x => React.createElement("tr", { key: x.id, className: "hover:bg-gray-50" },
-                        React.createElement(Td, null,
-                            React.createElement("div", { className: "font-bold" }, x.name),
-                            React.createElement("div", { className: "text-xs text-gray-500" }, x.sku || x.id)),
-                        React.createElement(Td, null,
-                            React.createElement("span", { className: "font-mono" }, x.barcode || '未登録')),
-                        React.createElement(Td, null,
-                            React.createElement(StockBadge, { x: x })),
-                        React.createElement(Td, null,
-                            React.createElement("div", { className: "text-amber-700 font-bold" },
-                                "\u6CE8\u610F ",
-                                getWarningStock(x)),
-                            React.createElement("div", { className: "text-red-700 font-black" },
-                                "\u30EC\u30C3\u30C9 ",
-                                getCriticalStock(x))),
-                        React.createElement(Td, null, yen(x.cost)),
-                        React.createElement(Td, null, yen(x.price)),
-                        React.createElement(Td, null,
-                            React.createElement("div", { className: "flex gap-2" },
-                                React.createElement("button", { onClick: () => setEditing({ ...x }), className: "text-blue-700 font-bold" }, "\u7DE8\u96C6"),
-                                React.createElement("button", { onClick: () => { if (confirm(`${x.name}を無効化しますか？`))
-                                        onDelete(x.id); }, className: "text-red-600" },
-                                    React.createElement(Trash2, { size: 17 }))))))))),
-            React.createElement("div", { className: "md:hidden divide-y divide-gray-200" }, filtered.map(x => React.createElement("div", { key: x.id, className: "p-4" },
-                React.createElement("div", { className: "flex justify-between gap-3" },
-                    React.createElement("div", { className: "min-w-0" },
-                        React.createElement("div", { className: "font-extrabold text-base" }, x.name),
-                        React.createElement("div", { className: "text-xs text-gray-500 mt-1" },
-                            "SKU: ",
-                            x.sku || '-',
-                            " / JAN: ",
-                            x.barcode || '-')),
-                    React.createElement(StockBadge, { x: x })),
-                React.createElement("div", { className: "grid grid-cols-3 gap-2 mt-3 text-xs" },
-                    React.createElement(Mini, { label: "\u6CE8\u610F / \u30EC\u30C3\u30C9", value: `${getWarningStock(x)} / ${getCriticalStock(x)}` }),
-                    React.createElement(Mini, { label: "\u4ED5\u5165", value: yen(x.cost) }),
-                    React.createElement(Mini, { label: "\u8CA9\u58F2", value: yen(x.price) })),
-                React.createElement("button", { onClick: () => setEditing({ ...x }), className: "mt-3 w-full py-2 rounded-lg bg-gray-100 font-bold" }, "\u7DE8\u96C6")))),
-            !filtered.length && React.createElement(Empty, { text: "\u8A72\u5F53\u3059\u308B\u5546\u54C1\u304C\u3042\u308A\u307E\u305B\u3093\u3002" })));
+                            React.createElement(Th, null, "商品 / SKU"),
+                            React.createElement(Th, null, "JAN・バーコード"),
+                            React.createElement(Th, null, "規格 / 棚"),
+                            React.createElement(Th, null, "現在庫"),
+                            React.createElement(Th, null, "注意 / レッド"),
+                            React.createElement(Th, null, "仕入単価"),
+                            React.createElement(Th, null, "販売単価"),
+                            React.createElement(Th, null, "操作"))),
+                    React.createElement("tbody", { className: "divide-y divide-gray-200" }, desktopRows))),
+            React.createElement("div", { className: "md:hidden divide-y divide-gray-200" }, mobileRows),
+            !filtered.length && React.createElement(Empty, { text: "該当する商品がありません。" }))
+    );
 }
 function ProductForm({ product, onSave, onCancel }) {
-    var _a, _b, _c, _d, _e, _f, _g;
-    const [f, setF] = useState({ ...product, purchaseUnit: product.purchaseUnit || product.unit || '個', purchaseFactor: Number(product.purchaseFactor || 1), warningStock: Number((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10)) });
+    var _a, _b, _c, _d, _e, _f, _g, _h;
+    const [f, setF] = useState({ ...product, purchaseUnit: product.purchaseUnit || product.unit || '個', purchaseFactor: Number(product.purchaseFactor || 1), contentAmount: Number(product.contentAmount || 0), contentUnit: product.contentUnit || 'g', details: product.details || '', shelf: product.shelf || '', warningStock: Number((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10)) });
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
     const warning = Number(f.warningStock || 0);
     const critical = Number(f.minStock || 0);
     return React.createElement(Card, { className: "p-5 border-blue-300" },
         React.createElement("h3", { className: "font-extrabold text-lg mb-2" }, f.id ? '商品マスタ編集' : '新規商品登録'),
-        React.createElement("div", { className: "p-3 mb-4 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900" }, "\u5728\u5EAB\u306F\u300C\u57FA\u6E96\u5358\u4F4D\u300D\u3067\u7BA1\u7406\u3057\u307E\u3059\u3002\u4F8B\uFF1A\u62B9\u83361\u888B=1000g\u306A\u3089\u3001\u57FA\u6E96\u5358\u4F4D=g\u3001\u4ED5\u5165\u5358\u4F4D=\u888B\u3001\u63DB\u7B97\u91CF=1000 \u3068\u8A2D\u5B9A\u3057\u307E\u3059\u3002"),
+        React.createElement("div", { className: "p-3 mb-4 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900" }, "在庫は「基準単位」で管理します。内容量・特徴・棚番号も登録すると、QR読取時に商品詳細として表示できます。QR自体には商品IDだけを入れるため、後から内容を変更してもQRの貼り替えは不要です。"),
         React.createElement("div", { className: "grid md:grid-cols-3 gap-4" },
-            React.createElement(Field, { label: "\u5546\u54C1\u540D *" },
+            React.createElement(Field, { label: "商品名 *" },
                 React.createElement("input", { required: true, value: f.name, onChange: e => set('name', e.target.value), className: "input" })),
             React.createElement(Field, { label: "SKU" },
-                React.createElement("input", { value: f.sku || '', onChange: e => set('sku', e.target.value), className: "input", placeholder: "\u672A\u5165\u529B\u306A\u3089\u81EA\u52D5\u63A1\u756A" })),
-            React.createElement(Field, { label: "JAN / 1\u6B21\u5143\u30D0\u30FC\u30B3\u30FC\u30C9" },
-                React.createElement("input", { inputMode: "numeric", value: f.barcode || '', onChange: e => set('barcode', e.target.value.trim()), className: "input font-mono" })),
-            React.createElement(Field, { label: "\u30AB\u30C6\u30B4\u30EA" },
+                React.createElement("input", { value: f.sku || '', onChange: e => set('sku', e.target.value), className: "input", placeholder: "未入力なら自動採番" })),
+            React.createElement(Field, { label: "JAN / 1次元バーコード（ある場合）" },
+                React.createElement("input", { inputMode: "text", value: f.barcode || '', onChange: e => set('barcode', e.target.value.trim()), className: "input font-mono", placeholder: "ない商品は空欄でOK" })),
+            React.createElement(Field, { label: "カテゴリ" },
                 React.createElement("input", { value: f.category || '', onChange: e => set('category', e.target.value), className: "input" })),
-            React.createElement(Field, { label: "\u5728\u5EAB\u306E\u57FA\u6E96\u5358\u4F4D" },
+            React.createElement(Field, { label: "内容量" },
+                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_b = f.contentAmount) !== null && _b !== void 0 ? _b : 0, onChange: e => set('contentAmount', Number(e.target.value)), className: "input", placeholder: "例: 500" })),
+            React.createElement(Field, { label: "内容量の単位" },
+                React.createElement("select", { value: f.contentUnit || 'g', onChange: e => set('contentUnit', e.target.value), className: "input" }, CONTENT_UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
+            React.createElement(Field, { label: "棚・保管場所" },
+                React.createElement("input", { value: f.shelf || '', onChange: e => set('shelf', e.target.value), className: "input", placeholder: "例: 冷蔵庫A-2 / 棚B3" })),
+            React.createElement(Field, { label: "在庫の基準単位" },
                 React.createElement("select", { value: f.unit || '個', onChange: e => set('unit', e.target.value), className: "input" }, UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
-            React.createElement(Field, { label: "\u4ED5\u5165\u5358\u4F4D" },
+            React.createElement(Field, { label: "仕入単位" },
                 React.createElement("select", { value: f.purchaseUnit || f.unit || '個', onChange: e => set('purchaseUnit', e.target.value), className: "input" }, UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
             React.createElement(Field, { label: `1 ${f.purchaseUnit || '仕入単位'} あたりの ${f.unit || '基準単位'} 数` },
-                React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: (_b = f.purchaseFactor) !== null && _b !== void 0 ? _b : 1, onChange: e => set('purchaseFactor', Number(e.target.value)), className: "input" })),
+                React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: (_c = f.purchaseFactor) !== null && _c !== void 0 ? _c : 1, onChange: e => set('purchaseFactor', Number(e.target.value)), className: "input" })),
             React.createElement(Field, { label: `現在庫（${f.unit || '個'}）` },
-                React.createElement("input", { type: "number", step: "0.001", value: (_c = f.stock) !== null && _c !== void 0 ? _c : 0, onChange: e => set('stock', Number(e.target.value)), className: "input", disabled: !!f.id })),
+                React.createElement("input", { type: "number", step: "0.001", value: (_d = f.stock) !== null && _d !== void 0 ? _d : 0, onChange: e => set('stock', Number(e.target.value)), className: "input", disabled: !!f.id })),
             React.createElement(Field, { label: `注意ライン（${f.unit || '個'}）` },
-                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_d = f.warningStock) !== null && _d !== void 0 ? _d : 10, onChange: e => set('warningStock', Number(e.target.value)), className: "input" })),
+                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_e = f.warningStock) !== null && _e !== void 0 ? _e : 10, onChange: e => set('warningStock', Number(e.target.value)), className: "input" })),
             React.createElement(Field, { label: `レッドライン（${f.unit || '個'}）` },
-                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_e = f.minStock) !== null && _e !== void 0 ? _e : 5, onChange: e => set('minStock', Number(e.target.value)), className: "input" })),
-            React.createElement(Field, { label: "\u4ED5\u5165\u5358\u4FA1" },
-                React.createElement("input", { type: "number", min: "0", value: (_f = f.cost) !== null && _f !== void 0 ? _f : 0, onChange: e => set('cost', Number(e.target.value)), className: "input" })),
-            React.createElement(Field, { label: "\u8CA9\u58F2\u5358\u4FA1" },
-                React.createElement("input", { type: "number", min: "0", value: (_g = f.price) !== null && _g !== void 0 ? _g : 0, onChange: e => set('price', Number(e.target.value)), className: "input" })),
-            React.createElement(Field, { label: "\u901A\u77E5Gmail\uFF08\u4EFB\u610F\uFF09" },
-                React.createElement("input", { type: "email", value: f.notifyEmail || '', onChange: e => set('notifyEmail', e.target.value.trim()), className: "input", placeholder: "\u7A7A\u6B04\u306A\u3089GAS\u5171\u901A\u8A2D\u5B9A" })),
+                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_f = f.minStock) !== null && _f !== void 0 ? _f : 5, onChange: e => set('minStock', Number(e.target.value)), className: "input" })),
+            React.createElement(Field, { label: "仕入単価" },
+                React.createElement("input", { type: "number", min: "0", value: (_g = f.cost) !== null && _g !== void 0 ? _g : 0, onChange: e => set('cost', Number(e.target.value)), className: "input" })),
+            React.createElement(Field, { label: "販売単価" },
+                React.createElement("input", { type: "number", min: "0", value: (_h = f.price) !== null && _h !== void 0 ? _h : 0, onChange: e => set('price', Number(e.target.value)), className: "input" })),
+            React.createElement(Field, { label: "通知Gmail（任意）" },
+                React.createElement("input", { type: "email", value: f.notifyEmail || '', onChange: e => set('notifyEmail', e.target.value.trim()), className: "input", placeholder: "任意：この商品の低在庫メール通知先" })),
             React.createElement("div", { className: "md:col-span-3" },
-                React.createElement(Field, { label: "\u5225\u540D\u30FB\u9818\u53CE\u66F8\u8868\u8A18\uFF08\u30AB\u30F3\u30DE\u533A\u5207\u308A\uFF09" },
-                    React.createElement("input", { value: f.aliases || '', onChange: e => set('aliases', e.target.value), className: "input", placeholder: "\u4F8B\uFF1A\u62B9\u8336BLEND, MATCHA POWDER" })))),
-        warning <= critical && React.createElement("div", { className: "mt-3 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm font-bold" }, "\u6CE8\u610F\u30E9\u30A4\u30F3\u306F\u30EC\u30C3\u30C9\u30E9\u30A4\u30F3\u3088\u308A\u5927\u304D\u3044\u6570\u306B\u3057\u3066\u304F\u3060\u3055\u3044\u3002"),
+                React.createElement(Field, { label: "商品特徴・規格メモ" },
+                    React.createElement("textarea", { value: f.details || '', onChange: e => set('details', e.target.value), className: "input min-h-[88px]", placeholder: "例: 岡山県産、深蒸し、要冷蔵、開封後は密封" }))),
+            React.createElement("div", { className: "md:col-span-3" },
+                React.createElement(Field, { label: "別名・領収書表記（カンマ区切り）" },
+                    React.createElement("input", { value: f.aliases || '', onChange: e => set('aliases', e.target.value), className: "input", placeholder: "例：抹茶BLEND, MATCHA POWDER" })))),
+        warning <= critical && React.createElement("div", { className: "mt-3 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm font-bold" }, "注意ラインはレッドラインより大きい数にしてください。"),
         React.createElement("div", { className: "flex flex-col-reverse sm:flex-row justify-end gap-2 mt-5" },
-            React.createElement("button", { onClick: onCancel, className: "px-5 py-2.5 rounded-xl bg-gray-100 font-bold" }, "\u30AD\u30E3\u30F3\u30BB\u30EB"),
-            React.createElement("button", { onClick: () => { if (!f.name.trim())
-                    return toast('商品名を入力してください。', 'warn'); if (Number(f.warningStock || 0) <= Number(f.minStock || 0))
-                    return toast('注意ラインはレッドラインより大きくしてください。', 'warn'); onSave(f); }, className: "px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2" },
+            React.createElement("button", { onClick: onCancel, className: "px-5 py-2.5 rounded-xl bg-gray-100 font-bold" }, "キャンセル"),
+            React.createElement("button", { onClick: () => { if (!String(f.name || '').trim()) return toast('商品名を入力してください。', 'warn'); if (Number(f.warningStock || 0) <= Number(f.minStock || 0)) return toast('注意ラインはレッドラインより大きくしてください。', 'warn'); onSave(f); }, className: "px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2" },
                 React.createElement(Save, { size: 18 }),
-                "\u4FDD\u5B58")));
+                "保存")));
+}
+function ProductQrManager({ product, onClose }) {
+    const payload = makeProductQrPayload(product);
+    const qrDataUrl = useMemo(() => makeQrDataUrl(payload, 9, 4), [payload]);
+    const printLabel = (mode) => {
+        if (!qrDataUrl) return toast('QRコードを生成できませんでした。ネット接続を確認してください。', 'error');
+        const managementNo = String(product.sku || product.id || '');
+        const specs = mode === 'product'
+            ? [productContentText(product)].filter(Boolean).join(' / ')
+            : [productContentText(product), product.category || '', product.shelf ? `保管: ${product.shelf}` : ''].filter(Boolean).join(' / ');
+        const title = mode === 'shelf' ? '棚管理QR' : mode === 'movement' ? '入庫・販売・使用 QRカード' : '商品管理QR';
+        const pageSize = mode === 'movement' ? 'A6 portrait' : mode === 'shelf' ? '90mm 60mm' : '58mm 40mm';
+        const qrWidth = mode === 'movement' ? '58mm' : mode === 'shelf' ? '32mm' : '24mm';
+        const help = mode === 'movement' ? '<div class="steps"><b>使い方</b><br>1. スマホでQRを読む<br>2. 入庫 / 販売 / 使用を選ぶ<br>3. 数量・単位を入力して確定</div>' : '';
+        const w = window.open('', '_blank', 'width=720,height=900');
+        if (!w) return toast('印刷画面を開けません。ポップアップを許可してください。', 'warn');
+        w.document.write(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${escapeHtml(product.name)} ${title}</title><style>
+            @page{size:${pageSize};margin:${mode==='product'?'3mm':'5mm'}}*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;margin:0;color:#111827} .label{border:2px solid #111827;border-radius:10px;padding:${mode==='product'?'2.5mm':'5mm'};text-align:center;min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center}.brand{font-weight:900;font-size:${mode==='product'?'9px':'12px'};letter-spacing:.08em}.kind{font-weight:900;font-size:${mode==='product'?'10px':'14px'};margin:1mm 0}.name{font-size:${mode==='movement'?'22px':mode==='product'?'12px':'16px'};font-weight:900;line-height:1.2}.spec{font-size:${mode==='product'?'9px':'11px'};font-weight:700;margin-top:1mm}.details{font-size:10px;margin-top:1mm;max-width:90%;white-space:pre-wrap}.qr{width:${qrWidth};height:${qrWidth};object-fit:contain;margin:${mode==='product'?'1mm':'3mm'} auto}.id{font-family:monospace;font-size:${mode==='product'?'8px':'10px'};font-weight:800;word-break:break-all}.steps{margin-top:3mm;padding:3mm;border:1.5px solid #111827;border-radius:8px;text-align:left;font-size:12px;line-height:1.6;width:100%}.note{font-size:9px;margin-top:2mm} @media print{button{display:none}}</style></head><body><div class="label"><div class="brand">BAKERU 商品・在庫管理</div><div class="kind">${title}</div><div class="name">${escapeHtml(product.name)}</div><div class="spec">${escapeHtml(specs)}</div>${mode!=='product' && product.details ? `<div class="details">${escapeHtml(product.details)}</div>` : ''}<img class="qr" src="${qrDataUrl}"><div class="id">管理番号：${escapeHtml(managementNo)}</div>${help}${mode!=='product'?'<div class="note">QRは商品IDに連結。商品情報を変更しても再発行不要です。</div>':''}</div><script>window.onload=()=>setTimeout(()=>window.print(),250);window.onafterprint=()=>window.close();<\/script></body></html>`);
+        w.document.close();
+    };
+    const saveQr = () => {
+        if (!qrDataUrl) return;
+        const a = document.createElement('a');
+        a.href = qrDataUrl;
+        a.download = `BAKERU_QR_${String(product.sku || product.id).replace(/[^a-zA-Z0-9_-]/g, '_')}.gif`;
+        a.click();
+    };
+    return React.createElement(Card, { className: "p-5 border-emerald-300 bg-emerald-50/40" },
+        React.createElement("div", { className: "flex items-start justify-between gap-3" },
+            React.createElement("div", null,
+                React.createElement("div", { className: "text-xs font-black text-emerald-700" }, "BAKERU専用 商品QR"),
+                React.createElement("h3", { className: "text-xl font-black mt-1" }, product.name),
+                React.createElement("div", { className: "text-sm text-gray-600 mt-1" }, "内容量: ", productContentText(product), product.shelf ? ` / 棚: ${product.shelf}` : '')),
+            React.createElement("button", { onClick: onClose, className: "w-10 h-10 rounded-xl bg-white border-2 border-gray-200 flex items-center justify-center" }, React.createElement(X, { size: 18 }))),
+        React.createElement("div", { className: "grid md:grid-cols-[220px_1fr] gap-5 mt-4 items-center" },
+            React.createElement("div", { className: "bg-white p-4 rounded-2xl border-2 border-gray-200 text-center" },
+                qrDataUrl ? React.createElement("img", { src: qrDataUrl, alt: `${product.name} QRコード`, className: "w-full max-w-[190px] mx-auto" }) : React.createElement("div", { className: "p-8 text-red-700 font-bold" }, "QR生成ライブラリを読み込めませんでした"),
+                React.createElement("div", { className: "font-mono text-xs break-all mt-2 text-gray-700 font-black" }, `管理番号：${product.sku || product.id}`)),
+            React.createElement("div", { className: "space-y-3" },
+                React.createElement("div", { className: "p-3 rounded-xl bg-white border border-emerald-200 text-sm" },
+                    React.createElement("b", null, "このQRでできること"),
+                    React.createElement("div", { className: "mt-1 leading-7" }, "商品現物の管理、棚位置の在庫確認、ラミネートカードからの入庫・出庫、棚卸に同じQRを使えます。読み取ると最新の商品詳細と現在庫を表示します。")),
+                React.createElement("div", { className: "grid sm:grid-cols-3 gap-2" },
+                    React.createElement("button", { onClick: () => printLabel('product'), className: "py-3 rounded-xl bg-blue-600 text-white font-black flex items-center justify-center gap-2" }, React.createElement(Printer, { size: 17 }), "商品ラベル"),
+                    React.createElement("button", { onClick: () => printLabel('shelf'), className: "py-3 rounded-xl bg-emerald-600 text-white font-black flex items-center justify-center gap-2" }, React.createElement(Printer, { size: 17 }), "棚ラベル"),
+                    React.createElement("button", { onClick: () => printLabel('movement'), className: "py-3 rounded-xl bg-gray-900 text-white font-black flex items-center justify-center gap-2" }, React.createElement(Printer, { size: 17 }), "入出庫カード")),
+                React.createElement("button", { onClick: saveQr, className: "w-full py-2.5 rounded-xl border-2 border-gray-300 bg-white font-bold flex items-center justify-center gap-2" }, React.createElement(Download, { size: 17 }), "QR画像だけ保存"),
+                React.createElement("div", { className: "text-xs text-gray-600" }, "※ 入出庫カードはA6程度で印刷し、ラミネート加工して作業場所に置く運用を想定しています。"))));
 }
 function TransactionsView({ inventory, transactions, recordMovement }) {
     const [type, setType] = useState('in');
+    const [saving, setSaving] = useState(false);
     const [productId, setProductId] = useState('');
     const [qty, setQty] = useState(1);
     const [inputUnit, setInputUnit] = useState('');
@@ -797,24 +905,28 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
     const baseQty = product ? Math.round(Number(qty || 0) * factor * 1000) / 1000 : 0;
     const unitChoices = compatibleUnitChoices(product);
     const submit = async () => {
+        if (saving) return;
         try {
+            setSaving(true);
             await recordMovement({ productId, type, quantity: qty, inputUnit: inputUnit || (product === null || product === void 0 ? void 0 : product.unit), source: '手入力', note });
             setQty(1);
             setNote('');
-            toast(type === 'in' ? '入庫を記録しました。' : '出庫を記録しました。');
+            toast(`${movementLabel(type)}を記録しました。`);
         }
         catch (e) {
             toast(e.message, 'error');
         }
+        finally { setSaving(false); }
     };
     return React.createElement("div", { className: "grid lg:grid-cols-[380px_1fr] gap-5" },
         React.createElement(Card, { className: "p-5 h-fit" },
             React.createElement("h3", { className: "font-extrabold text-lg mb-4" }, "\u5165\u51FA\u5EAB\u3092\u624B\u5165\u529B"),
             React.createElement("div", { className: "space-y-4" },
                 React.createElement(Field, { label: "\u7A2E\u5225" },
-                    React.createElement("div", { className: "grid grid-cols-2 gap-2" },
-                        React.createElement("button", { onClick: () => setType('in'), className: `py-2.5 rounded-xl font-bold border-2 ${type === 'in' ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300'}` }, "\u5165\u5EAB"),
-                        React.createElement("button", { onClick: () => setType('out'), className: `py-2.5 rounded-xl font-bold border-2 ${type === 'out' ? 'bg-orange-600 text-white border-orange-600' : 'border-gray-300'}` }, "\u51FA\u5EAB"))),
+                    React.createElement("div", { className: "grid grid-cols-3 gap-2" },
+                        React.createElement("button", { onClick: () => setType('in'), className: `py-2.5 rounded-xl font-bold border-2 ${type === 'in' ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300'}` }, "入庫（仕入れ）"),
+                        React.createElement("button", { onClick: () => setType('sale'), className: `py-2.5 rounded-xl font-bold border-2 ${type === 'sale' ? 'bg-orange-600 text-white border-orange-600' : 'border-gray-300'}` }, "販売"),
+                        React.createElement("button", { onClick: () => setType('use'), className: `py-2.5 rounded-xl font-bold border-2 ${type === 'use' ? 'bg-violet-600 text-white border-violet-600' : 'border-gray-300'}` }, "使用"))),
                 React.createElement(Field, { label: "\u5546\u54C1" },
                     React.createElement("select", { value: productId, onChange: e => setProductId(e.target.value), className: "input" },
                         React.createElement("option", { value: "" }, "\u5546\u54C1\u3092\u9078\u629E"),
@@ -839,7 +951,7 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
                     product.purchaseFactor || 1,
                     " ",
                     product.unit || '個'),
-                React.createElement(Field, { label: type === 'out' ? '出庫単位' : '入庫単位' },
+                React.createElement(Field, { label: type === 'in' ? '入庫単位' : `${movementLabel(type)}単位` },
                     product ? React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-3 gap-2" }, unitChoices.map(u => React.createElement("button", { key: u, onClick: () => setInputUnit(u), className: `py-2.5 rounded-xl border-2 font-bold ${inputUnit === u ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300'}` }, u))) : React.createElement("div", { className: "p-3 rounded-xl bg-gray-50 border-2 border-dashed border-gray-300 text-sm text-gray-500 font-bold" }, "商品を選択すると g・kg・ml・L・個・袋・箱など、商品に合う単位を選べます。")),
                 React.createElement(Field, { label: "\u6570\u91CF" },
                     React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: qty, onChange: e => setQty(Number(e.target.value)), className: "input text-lg font-black" })),
@@ -851,16 +963,18 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
                         " ",
                         product.unit || '個'),
                     " \u3068\u3057\u3066\u53CD\u6620\u3055\u308C\u307E\u3059\u3002"),
+                product && movementIsOut(type) && React.createElement("div", { className: `p-3 rounded-xl border-2 text-sm font-bold ${stockStage({...product, stock:Number(product.stock||0)-baseQty}) === 'critical' ? 'bg-red-50 border-red-300 text-red-900' : stockStage({...product, stock:Number(product.stock||0)-baseQty}) === 'warning' ? 'bg-amber-50 border-amber-300 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}` },
+                    `処理後在庫: ${Math.round((Number(product.stock||0)-baseQty)*1000)/1000} ${product.unit||'個'} / ${stageLabel(stockStage({...product, stock:Number(product.stock||0)-baseQty}))}`),
                 React.createElement(Field, { label: "\u30E1\u30E2" },
                     React.createElement("input", { value: note, onChange: e => setNote(e.target.value), className: "input" })),
-                React.createElement("button", { disabled: !productId, onClick: submit, className: `w-full py-3 rounded-xl text-white font-extrabold disabled:opacity-40 ${type === 'out' ? 'bg-orange-600' : 'bg-blue-600'}` }, "\u8A18\u9332\u3059\u308B"))),
+                React.createElement("button", { disabled: !productId || saving, onClick: submit, className: `w-full py-3 rounded-xl text-white font-extrabold disabled:opacity-40 ${type === 'in' ? 'bg-blue-600' : type === 'sale' ? 'bg-orange-600' : 'bg-violet-600'}` }, saving ? '記録中...' : `${movementLabel(type)}を記録`))),
         React.createElement(Card, { className: "overflow-hidden" },
             React.createElement("div", { className: "p-5 border-b-2 border-gray-200" },
                 React.createElement("h3", { className: "font-extrabold text-lg" }, "\u5165\u51FA\u5EAB\u5C65\u6B74")),
             React.createElement("div", { className: "divide-y divide-gray-100" },
                 transactions.slice(0, 100).map(t => { var _a; return React.createElement("div", { key: t.id, className: "p-4 grid grid-cols-[1fr_auto] md:grid-cols-[170px_80px_1fr_130px] gap-2 text-sm items-center" },
                     React.createElement("span", { className: "hidden md:block text-gray-500" }, new Date(t.timestamp).toLocaleString('ja-JP')),
-                    React.createElement("span", { className: `font-extrabold ${t.type === 'out' || t.type === 'sale' ? 'text-orange-700' : 'text-blue-700'}` }, t.type === 'out' || t.type === 'sale' ? '出庫' : '入庫'),
+                    React.createElement("span", { className: `font-extrabold ${movementIsOut(t.type) ? 'text-orange-700' : 'text-blue-700'}` }, movementLabel(t.type)),
                     React.createElement("div", null,
                         React.createElement("div", { className: "font-bold" }, t.productName),
                         React.createElement("div", { className: "text-xs text-gray-500" },
@@ -868,7 +982,7 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
                             " ",
                             t.note || '')),
                     React.createElement("div", { className: "font-black text-right" },
-                        t.type === 'out' || t.type === 'sale' ? '-' : '+', (_a = t.inputQuantity) !== null && _a !== void 0 ? _a : t.quantity,
+                        movementIsOut(t.type) ? '-' : '+', (_a = t.inputQuantity) !== null && _a !== void 0 ? _a : t.quantity,
                         " ",
                         t.inputUnit || t.baseUnit || '',
                         t.inputUnit && t.baseUnit && t.inputUnit !== t.baseUnit ? React.createElement("div", { className: "text-[11px] text-gray-500" },
@@ -896,18 +1010,31 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
     const [unknown, setUnknown] = useState(null);
     const [manual, setManual] = useState('');
     const imageRef = useRef(null);
+    useEffect(() => {
+        if (!found) return;
+        const latest = inventory.find(x => String(x.id) === String(found.id));
+        if (latest && latest !== found) setFound(latest);
+    }, [inventory, found && found.id]);
     const onCode = async (rawCode) => {
         var _a;
         const code = String(rawCode || '').trim();
         if (!code)
             return;
-        const p = inventory.find(x => String(x.barcode || '') === code);
+        const p = findProductByCode(inventory, code);
+        const bakeruQr = parseBakeruProductQr(code);
+        if (!p && bakeruQr) {
+            setBarcode(code);
+            setFound(null);
+            setUnknown(null);
+            toast(`このBAKERU QRの商品IDが商品マスタにありません: ${bakeruQr.productId}`, 'error');
+            return;
+        }
         const today = new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD (端末の現地日付)
         const loadedHistory = await idbGet(LS.productScanHistory, []);
         const history = Array.isArray(loadedHistory) ? loadedHistory : [];
         const sameDay = history.filter(h => h.date === today && h.barcode === code);
-        if (sameDay.length > 0) {
-            const label = (p === null || p === void 0 ? void 0 : p.name) || `バーコード ${code}`;
+        if (!bakeruQr && sameDay.length > 0) {
+            const label = (p === null || p === void 0 ? void 0 : p.name) || `コード ${code}`;
             const lastTime = ((_a = sameDay[sameDay.length - 1]) === null || _a === void 0 ? void 0 : _a.timestamp)
                 ? new Date(sameDay[sameDay.length - 1].timestamp).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
                 : '時刻不明';
@@ -924,13 +1051,13 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
                 productId: (p === null || p === void 0 ? void 0 : p.id) || '',
                 productName: (p === null || p === void 0 ? void 0 : p.name) || '',
                 timestamp: Date.now(),
-                source: '商品バーコード'
+                source: '商品コード/QR'
             }].slice(-3000);
         await idbSet(LS.productScanHistory, compactForLocalCache(nextHistory.slice(-1000)));
         setBarcode(code);
         setFound(p || null);
         if (!p)
-            setUnknown({ barcode: code, name: '', sku: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' });
+            setUnknown({ barcode: code, name: '', sku: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, contentAmount: 0, contentUnit: 'g', details: '', shelf: '', stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' });
         else
             setUnknown(null);
     };
@@ -940,7 +1067,7 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
             const result = await api('geminiIdentifyProduct', { image });
             const d = result.data || {};
             const code = d.barcode || barcode;
-            const p = inventory.find(x => String(x.barcode || '') === String(code));
+            const p = findProductByCode(inventory, code);
             if (p) {
                 setFound(p);
                 setUnknown(null);
@@ -948,7 +1075,7 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
                 return;
             }
             setBarcode(code);
-            setUnknown(u => ({ ...(u || {}), barcode: code, name: d.productName || (u === null || u === void 0 ? void 0 : u.name) || '', category: d.category || (u === null || u === void 0 ? void 0 : u.category) || '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' }));
+            setUnknown(u => ({ ...(u || {}), barcode: code, name: d.productName || (u === null || u === void 0 ? void 0 : u.name) || '', category: d.category || (u === null || u === void 0 ? void 0 : u.category) || '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, contentAmount: (u === null || u === void 0 ? void 0 : u.contentAmount) || 0, contentUnit: (u === null || u === void 0 ? void 0 : u.contentUnit) || 'g', details: (u === null || u === void 0 ? void 0 : u.details) || '', shelf: (u === null || u === void 0 ? void 0 : u.shelf) || '', stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' }));
         }
         catch (e) {
             toast(e.message, 'error');
@@ -958,11 +1085,11 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
         React.createElement(Card, { className: "p-5" },
             React.createElement("h3", { className: "font-extrabold text-lg flex items-center gap-2" },
                 React.createElement(Barcode, null),
-                "1\u6B21\u5143\u30B3\u30FC\u30C9\u3092\u8AAD\u3080"),
-            React.createElement("p", { className: "text-sm text-gray-600 mt-2 mb-4" }, "JAN/EAN/Code128\u7B49\u306F\u7AEF\u672B\u306E\u30D0\u30FC\u30B3\u30FC\u30C9\u691C\u51FA\u6A5F\u80FD\u3092\u512A\u5148\u3057\u307E\u3059\u3002\u6570\u5B57\u3092AI\u63A8\u6E2C\u3060\u3051\u306B\u983C\u3089\u306A\u3044\u8A2D\u8A08\u3067\u3059\u3002"),
+                "バーコード / QRコードを読む"),
+            React.createElement("p", { className: "text-sm text-gray-600 mt-2 mb-4" }, "JAN/EAN/Code128に加えてBAKERU専用QRを読み取れます。QRは商品IDを呼び出し、最新の商品詳細・現在庫を表示します。"),
             React.createElement(LiveBarcodeScanner, { onDetected: onCode }),
             React.createElement("div", { className: "mt-4 flex gap-2" },
-                React.createElement("input", { value: manual, onChange: e => setManual(e.target.value), inputMode: "numeric", placeholder: "\u30B3\u30FC\u30C9\u3092\u624B\u5165\u529B", className: "input flex-1 font-mono" }),
+                React.createElement("input", { value: manual, onChange: e => setManual(e.target.value), inputMode: "text", placeholder: "バーコード / QR内容 / SKUを手入力", className: "input flex-1 font-mono" }),
                 React.createElement("button", { onClick: () => manual && onCode(manual.trim()), className: "px-4 rounded-xl bg-gray-900 text-white font-bold" }, "\u691C\u7D22")),
             React.createElement("div", { className: "mt-4 border-t pt-4" },
                 React.createElement("div", { className: "text-sm font-bold mb-2" }, "\u30D0\u30FC\u30B3\u30FC\u30C9\u304C\u8AAD\u307F\u306B\u304F\u3044\u5834\u5408\uFF1A\u5546\u54C1\u753B\u50CF\u304B\u3089\u88DC\u52A9\u8A8D\u8B58"),
@@ -976,10 +1103,12 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
                 React.createElement("div", { className: "p-4 rounded-xl bg-emerald-50 border-2 border-emerald-200" },
                     React.createElement("div", { className: "text-xs font-bold text-emerald-700" }, "\u5546\u54C1\u30DE\u30B9\u30BF\u4E00\u81F4"),
                     React.createElement("div", { className: "text-xl font-black mt-1" }, found.name),
-                    React.createElement("div", { className: "font-mono text-sm mt-1" }, found.barcode)),
+                    React.createElement("div", { className: "font-mono text-sm mt-1" }, found.barcode || 'BAKERU専用QR'),
+                    React.createElement("div", { className: "text-sm font-bold mt-2" }, "内容量: ", productContentText(found), found.shelf ? ` / 棚: ${found.shelf}` : ''),
+                    found.details && React.createElement("div", { className: "text-sm text-gray-700 mt-1" }, found.details)),
                 React.createElement("div", { className: "grid grid-cols-2 gap-2" },
-                    React.createElement(Mini, { label: "\u73FE\u5728\u5EAB", value: `${found.stock} ${found.unit || '個'}` }),
-                    React.createElement(Mini, { label: "\u6CE8\u610F / \u30EC\u30C3\u30C9", value: `${getWarningStock(found)} / ${getCriticalStock(found)}` })),
+                    React.createElement(Mini, { label: "現在庫", value: `${found.stock} ${found.unit || '個'}` }),
+                    React.createElement(Mini, { label: "注意 / レッド", value: `${getWarningStock(found)} / ${getCriticalStock(found)}` })),
                 React.createElement(QuickMovement, { product: found, recordMovement: recordMovement })) : unknown ? React.createElement("div", null,
                 React.createElement("div", { className: "p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 font-bold mb-4" }, "\u672A\u767B\u9332\u306E\u30D0\u30FC\u30B3\u30FC\u30C9\u3067\u3059\u3002\u5185\u5BB9\u3092\u78BA\u8A8D\u3057\u3066\u5546\u54C1\u30DE\u30B9\u30BF\u3078\u767B\u9332\u3057\u3066\u304F\u3060\u3055\u3044\u3002"),
                 React.createElement(ProductForm, { product: unknown, onCancel: () => setUnknown(null), onSave: async (p) => { const saved = await saveProduct(p); setFound(saved); setUnknown(null); toast('商品を登録しました。'); } })) : React.createElement(Empty, { text: "\u30B3\u30FC\u30C9\u3092\u8AAD\u307F\u53D6\u308B\u3068\u5546\u54C1\u60C5\u5831\u3092\u8868\u793A\u3057\u307E\u3059\u3002" })));
@@ -988,30 +1117,32 @@ function QuickMovement({ product, recordMovement }) {
     const [type, setType] = useState('in');
     const [unit, setUnit] = useState(product.unit || '個');
     const [qty, setQty] = useState(1);
+    const [saving, setSaving] = useState(false);
     useEffect(() => { setUnit(product.unit || '個'); setQty(1); }, [product.id]);
     const choices = compatibleUnitChoices(product);
     const baseQty = Math.round(Number(qty || 0) * movementFactor(product, unit) * 1000) / 1000;
-    const save = async () => { try {
-        await recordMovement({ productId: product.id, type, quantity: qty, inputUnit: unit, source: '商品バーコード' });
-        toast(`${type === 'in' ? '入庫' : '出庫'}を記録しました。`);
+    const save = async () => { if (saving) return; try {
+        setSaving(true);
+        await recordMovement({ productId: product.id, type, quantity: qty, inputUnit: unit, source: '商品コード/QR' });
+        toast(`${movementLabel(type)}を記録しました。`);
+        setQty(1);
     }
     catch (e) {
         toast(e.message, 'error');
-    } };
+    } finally { setSaving(false); } };
     return React.createElement("div", { className: "p-3 rounded-xl border-2 border-gray-200 bg-white" },
         React.createElement("div", { className: "font-extrabold mb-2" }, "\u3053\u306E\u5546\u54C1\u3092\u8A18\u9332"),
-        React.createElement("div", { className: "grid grid-cols-2 gap-2" },
-            React.createElement("button", { onClick: () => setType('in'), className: `py-2 rounded-lg font-bold ${type === 'in' ? 'bg-blue-600 text-white' : 'bg-gray-100'}` }, "\u5165\u5EAB"),
-            React.createElement("button", { onClick: () => setType('out'), className: `py-2 rounded-lg font-bold ${type === 'out' ? 'bg-orange-600 text-white' : 'bg-gray-100'}` }, "\u51FA\u5EAB")),
+        React.createElement("div", { className: "grid grid-cols-3 gap-2" },
+            React.createElement("button", { onClick: () => setType('in'), className: `py-2 rounded-lg font-bold ${type === 'in' ? 'bg-blue-600 text-white' : 'bg-gray-100'}` }, "入庫"),
+            React.createElement("button", { onClick: () => setType('sale'), className: `py-2 rounded-lg font-bold ${type === 'sale' ? 'bg-orange-600 text-white' : 'bg-gray-100'}` }, "販売"),
+            React.createElement("button", { onClick: () => setType('use'), className: `py-2 rounded-lg font-bold ${type === 'use' ? 'bg-violet-600 text-white' : 'bg-gray-100'}` }, "使用")),
         React.createElement("div", { className: "grid grid-cols-2 gap-2 mt-2" }, choices.map(u => React.createElement("button", { key: u, onClick: () => setUnit(u), className: `py-2 rounded-lg border-2 font-bold ${unit === u ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-300'}` }, u))),
+        React.createElement("div", { className: "grid grid-cols-4 gap-2 mt-2" }, [1,2,5,10].map(n => React.createElement("button", { key:n, onClick:()=>setQty(n), className: "py-2 rounded-lg bg-gray-100 font-black" }, n))),
         React.createElement("div", { className: "grid grid-cols-[1fr_auto] gap-2 mt-2" },
             React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: qty, onChange: e => setQty(Number(e.target.value)), className: "input font-black" }),
-            React.createElement("button", { onClick: save, className: `px-4 rounded-xl text-white font-black ${type === 'out' ? 'bg-orange-600' : 'bg-blue-600'}` }, "\u78BA\u5B9A")),
-        React.createElement("div", { className: "text-xs text-gray-600 mt-2" },
-            "\u5728\u5EAB\u53CD\u6620: ",
-            baseQty,
-            " ",
-            product.unit || '個'));
+            React.createElement("button", { disabled:saving, onClick: save, className: `px-4 rounded-xl text-white font-black disabled:opacity-40 ${type === 'in' ? 'bg-blue-600' : type === 'sale' ? 'bg-orange-600' : 'bg-violet-600'}` }, saving ? '記録中' : '確定')),
+        React.createElement("div", { className: `text-xs mt-2 font-bold ${movementIsOut(type) && stockStage({...product,stock:Number(product.stock||0)-baseQty}) === 'critical' ? 'text-red-700' : movementIsOut(type) && stockStage({...product,stock:Number(product.stock||0)-baseQty}) === 'warning' ? 'text-amber-700' : 'text-gray-600'}` },
+            `在庫反映: ${baseQty} ${product.unit || '個'} / 処理後 ${Math.round((Number(product.stock||0) + (movementIsOut(type)?-baseQty:baseQty))*1000)/1000} ${product.unit||'個'}`));
 }
 function LiveBarcodeScanner({ onDetected }) {
     const videoRef = useRef(null);
@@ -1038,7 +1169,13 @@ function LiveBarcodeScanner({ onDetected }) {
             return;
         }
         try {
-            detectorRef.current = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'codabar', 'itf', 'upc_a', 'upc_e'] });
+            const desiredFormats = ['qr_code', 'ean_13', 'ean_8', 'code_128', 'code_39', 'codabar', 'itf', 'upc_a', 'upc_e'];
+            let formats = desiredFormats;
+            if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
+                const supportedFormats = await window.BarcodeDetector.getSupportedFormats();
+                formats = desiredFormats.filter(f => supportedFormats.includes(f));
+            }
+            detectorRef.current = new window.BarcodeDetector(formats.length ? { formats } : undefined);
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
             streamRef.current = stream;
             videoRef.current.srcObject = stream;
@@ -1054,7 +1191,7 @@ function LiveBarcodeScanner({ onDetected }) {
                     if (code) {
                         const now = Date.now();
                         const lastHit = lastDetectedRef.current;
-                        const duplicateTooSoon = code === lastHit.code && (now - lastHit.at) < 900;
+                        const duplicateTooSoon = code === lastHit.code && (now - lastHit.at) < 1800;
                         if (!duplicateTooSoon) {
                             lastDetectedRef.current = { code, at: now };
                             setLast(code);
@@ -1078,14 +1215,14 @@ function LiveBarcodeScanner({ onDetected }) {
             React.createElement("video", { ref: videoRef, muted: true, playsInline: true, className: "w-full h-full object-cover" }),
             React.createElement("div", { className: "absolute inset-[22%_10%] border-2 border-red-500 rounded-xl pointer-events-none" }),
             !running && React.createElement("div", { className: "absolute inset-0 flex items-center justify-center text-white bg-black/40 font-bold" }, "\u30AB\u30E1\u30E9\u505C\u6B62\u4E2D")),
-        React.createElement("button", { onClick: running ? stop : start, className: `w-full py-3 rounded-xl text-white font-extrabold ${running ? 'bg-red-600' : 'bg-blue-600'}` }, running ? 'カメラを停止' : 'バーコードカメラを開始'),
+        React.createElement("button", { onClick: running ? stop : start, className: `w-full py-3 rounded-xl text-white font-extrabold ${running ? 'bg-red-600' : 'bg-blue-600'}` }, running ? 'カメラを停止' : 'バーコード・QRカメラを開始'),
         last && React.createElement("div", { className: "text-center font-mono text-lg font-black" },
             "\u8AAD\u53D6: ",
             last),
         React.createElement("div", { className: "text-xs text-gray-500 text-center" }, "\u540C\u3058\u30B3\u30FC\u30C9\u306F0.9\u79D2\u4EE5\u5185\u306E\u9023\u7D9A\u691C\u51FA\u3092\u7121\u8996\u3057\u307E\u3059\u3002\u3055\u3089\u306B\u3001\u540C\u4E00\u5546\u54C1\u3092\u540C\u3058\u65E5\u306B\u518D\u5EA6\u30B9\u30AD\u30E3\u30F3\u3059\u308B\u3068\u91CD\u8907\u8B66\u544A\u3092\u8868\u793A\u3057\u307E\u3059\u3002")) : React.createElement("div", { className: "p-4 rounded-xl bg-amber-50 border border-amber-300 text-sm text-amber-900" },
         React.createElement("b", null, "\u3053\u306E\u30D6\u30E9\u30A6\u30B6\u306F\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0BarcodeDetector\u975E\u5BFE\u5FDC\u3067\u3059\u3002"),
         React.createElement("br", null),
-        "Android Chrome\u7B49\u3067\u958B\u304F\u304B\u3001\u4E0B\u306E\u624B\u5165\u529B\u30FB\u5546\u54C1\u753B\u50CF\u88DC\u52A9\u3092\u5229\u7528\u3057\u3066\u304F\u3060\u3055\u3044\u3002"));
+        "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
 function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions, setAlerts, pullFromSheet }) {
     var _a, _b;
@@ -1137,7 +1274,7 @@ function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions,
     };
     const onBarcode = (code) => {
         setLastCode(code);
-        const p = inventory.find(x => String(x.barcode || '') === String(code));
+        const p = findProductByCode(inventory, code);
         if (!p) {
             toast(`未登録バーコード: ${code}`, 'error');
             return;
@@ -1279,7 +1416,7 @@ function StocktakeView({ inventory, api, setInventory, setAlerts, pullFromSheet 
     const filtered = inventory.filter(x => normalizeText(x.name).includes(normalizeText(search)) || String(x.barcode || '').includes(search));
     const onCode = (code) => {
         setLastCode(code);
-        const p = inventory.find(x => String(x.barcode || '') === String(code));
+        const p = findProductByCode(inventory, code);
         if (!p) {
             toast(`商品マスタ未登録: ${code}`, 'error');
             return;
@@ -1397,7 +1534,7 @@ function SettingsView({ gasUrl, setGasUrl, syncToken, setSyncToken, connection, 
         toast(e.message, 'error');
     } };
     const exportJson = () => { const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), inventory }, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `BAKERU_NEKKO_inventory_${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(a.href); };
-    const exportCsv = () => { const q = v => `"${String(v !== null && v !== void 0 ? v : '').replace(/"/g, '""')}"`; const head = ['id', 'sku', 'barcode', 'name', 'category', 'unit', 'purchaseUnit', 'purchaseFactor', 'stock', 'warningStock', 'minStock', 'cost', 'price']; const lines = [head.join(','), ...inventory.map(x => head.map(k => q(x[k])).join(','))]; const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `BAKERU_inventory_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(a.href); };
+    const exportCsv = () => { const q = v => `"${String(v !== null && v !== void 0 ? v : '').replace(/"/g, '""')}"`; const head = ['id', 'sku', 'barcode', 'name', 'category', 'unit', 'purchaseUnit', 'purchaseFactor', 'contentAmount', 'contentUnit', 'details', 'shelf', 'stock', 'warningStock', 'minStock', 'cost', 'price', 'notifyEmail']; const lines = [head.join(','), ...inventory.map(x => head.map(k => q(x[k])).join(','))]; const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `BAKERU_inventory_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(a.href); };
     return React.createElement("div", { className: "space-y-5 max-w-5xl" },
         React.createElement(Card, { className: "p-5" },
             React.createElement("h3", { className: "font-extrabold text-lg flex items-center gap-2" },
