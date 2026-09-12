@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.3</title>
-  <!-- BAKERU_BUILD: 2.7.3-standard-ocr-ai-assist -->
+  <title>BAKERU 商品・在庫管理 v2.7.4</title>
+  <!-- BAKERU_BUILD: 2.7.4-mobile-quantity-input -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -66,7 +66,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.7.3
+  BAKERU 商品・在庫管理 v2.7.4
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -953,11 +953,31 @@ function ProductQrManager({ product, onClose }) {
                 React.createElement("div", { className: "text-xs text-gray-600 leading-6" }, "商品貼付用は小さめ、棚用は中サイズ、入出庫カードはA6程度に印刷してラミネートする運用を想定しています。同じ商品なら何枚印刷してもQRの商品IDは同じです。"))));
 }
 
+function QuantityInput({ value, onChange, className = '' }) {
+    const clean = (raw) => {
+        let text = String(raw ?? '').replace(/[^0-9.]/g, '');
+        const firstDot = text.indexOf('.');
+        if (firstDot >= 0)
+            text = text.slice(0, firstDot + 1) + text.slice(firstDot + 1).replace(/\./g, '');
+        if (text.startsWith('.')) text = '0' + text;
+        return text;
+    };
+    const numeric = Number(value || 0);
+    const step = (delta) => {
+        const next = Math.max(0, Math.round((numeric + delta) * 1000) / 1000);
+        onChange(String(next));
+    };
+    return React.createElement("div", { className: "grid grid-cols-[52px_minmax(0,1fr)_52px] gap-2 items-stretch" },
+        React.createElement("button", { type: "button", onClick: () => step(-1), disabled: numeric <= 0, className: "min-h-[52px] rounded-xl border-2 border-gray-300 bg-white text-2xl font-black disabled:opacity-35", "aria-label": "数量を1減らす" }, "−"),
+        React.createElement("input", { type: "text", inputMode: "decimal", enterKeyHint: "done", value: value, onFocus: e => { if (String(value) === '0') onChange(''); setTimeout(() => e.target.select(), 0); }, onChange: e => onChange(clean(e.target.value)), onBlur: () => { if (String(value).trim() === '' || Number(value) <= 0) onChange('1'); }, className: `input text-center text-xl font-black tabular-nums ${className}`, placeholder: "数量を入力", "aria-label": "数量" }),
+        React.createElement("button", { type: "button", onClick: () => step(1), className: "min-h-[52px] rounded-xl border-2 border-blue-600 bg-blue-50 text-blue-700 text-2xl font-black", "aria-label": "数量を1増やす" }, "+"));
+}
+
 function TransactionsView({ inventory, transactions, recordMovement }) {
     const [type, setType] = useState('in');
     const [saving, setSaving] = useState(false);
     const [productId, setProductId] = useState('');
-    const [qty, setQty] = useState(1);
+    const [qty, setQty] = useState('1');
     const [inputUnit, setInputUnit] = useState('');
     const [note, setNote] = useState('');
     const product = inventory.find(x => x.id === productId);
@@ -971,7 +991,7 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
         try {
             setSaving(true);
             await recordMovement({ productId, type, quantity: qty, inputUnit: inputUnit || (product === null || product === void 0 ? void 0 : product.unit), source: '手入力', note });
-            setQty(1);
+            setQty('1');
             setNote('');
             toast(`${movementLabel(type)}を記録しました。`);
         }
@@ -1016,8 +1036,9 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
                 React.createElement(Field, { label: type === 'in' ? '入庫単位' : `${movementLabel(type)}単位` },
                     product ? React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-3 gap-2" }, unitChoices.map(u => React.createElement("button", { key: u, onClick: () => setInputUnit(u), className: `py-2.5 rounded-xl border-2 font-bold ${inputUnit === u ? 'bg-gray-900 text-white border-gray-900' : 'bg-white border-gray-300'}` }, u))) : React.createElement("div", { className: "p-3 rounded-xl bg-gray-50 border-2 border-dashed border-gray-300 text-sm text-gray-500 font-bold" }, "商品を選択すると g・kg・ml・L・個・袋・箱など、商品に合う単位を選べます。")),
                 React.createElement(Field, { label: "\u6570\u91CF" },
-                    React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: qty, onChange: e => setQty(Number(e.target.value)), className: "input text-lg font-black" })),
-                React.createElement("div", { className: "grid grid-cols-4 gap-2" }, [1, 5, 10, 20].map(n => React.createElement("button", { key: n, onClick: () => setQty(n), className: "py-2 rounded-lg bg-gray-100 font-bold" }, n))),
+                    React.createElement(QuantityInput, { value: qty, onChange: setQty })),
+                React.createElement("div", { className: "grid grid-cols-4 gap-2" }, [1, 2, 5, 10].map(n => React.createElement("button", { type: "button", key: n, onClick: () => setQty(String(n)), className: "min-h-[44px] py-2 rounded-lg bg-gray-100 border border-gray-200 font-black active:bg-blue-100" }, n))),
+                React.createElement("div", { className: "text-xs text-gray-500 -mt-2" }, "スマホでは − / ＋ または数字をタップして直接入力できます。入力欄をタップすると現在値を選択します。"),
                 product && React.createElement("div", { className: "p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-900 text-sm" },
                     "\u5728\u5EAB\u306B\u306F ",
                     React.createElement("b", null,
@@ -1178,16 +1199,16 @@ function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
 function QuickMovement({ product, recordMovement }) {
     const [type, setType] = useState('in');
     const [unit, setUnit] = useState(product.unit || '個');
-    const [qty, setQty] = useState(1);
+    const [qty, setQty] = useState('1');
     const [saving, setSaving] = useState(false);
-    useEffect(() => { setUnit(product.unit || '個'); setQty(1); }, [product.id]);
+    useEffect(() => { setUnit(product.unit || '個'); setQty('1'); }, [product.id]);
     const choices = compatibleUnitChoices(product);
     const baseQty = Math.round(Number(qty || 0) * movementFactor(product, unit) * 1000) / 1000;
     const save = async () => { if (saving) return; try {
         setSaving(true);
         await recordMovement({ productId: product.id, type, quantity: qty, inputUnit: unit, source: '商品コード/QR' });
         toast(`${movementLabel(type)}を記録しました。`);
-        setQty(1);
+        setQty('1');
     }
     catch (e) {
         toast(e.message, 'error');
@@ -1199,10 +1220,10 @@ function QuickMovement({ product, recordMovement }) {
             React.createElement("button", { onClick: () => setType('sale'), className: `py-2 rounded-lg font-bold ${type === 'sale' ? 'bg-orange-600 text-white' : 'bg-gray-100'}` }, "販売"),
             React.createElement("button", { onClick: () => setType('use'), className: `py-2 rounded-lg font-bold ${type === 'use' ? 'bg-violet-600 text-white' : 'bg-gray-100'}` }, "使用")),
         React.createElement("div", { className: "grid grid-cols-2 gap-2 mt-2" }, choices.map(u => React.createElement("button", { key: u, onClick: () => setUnit(u), className: `py-2 rounded-lg border-2 font-bold ${unit === u ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-300'}` }, u))),
-        React.createElement("div", { className: "grid grid-cols-4 gap-2 mt-2" }, [1,2,5,10].map(n => React.createElement("button", { key:n, onClick:()=>setQty(n), className: "py-2 rounded-lg bg-gray-100 font-black" }, n))),
-        React.createElement("div", { className: "grid grid-cols-[1fr_auto] gap-2 mt-2" },
-            React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: qty, onChange: e => setQty(Number(e.target.value)), className: "input font-black" }),
-            React.createElement("button", { disabled:saving, onClick: save, className: `px-4 rounded-xl text-white font-black disabled:opacity-40 ${type === 'in' ? 'bg-blue-600' : type === 'sale' ? 'bg-orange-600' : 'bg-violet-600'}` }, saving ? '記録中' : '確定')),
+        React.createElement("div", { className: "grid grid-cols-4 gap-2 mt-2" }, [1,2,5,10].map(n => React.createElement("button", { type: "button", key:n, onClick:()=>setQty(String(n)), className: "min-h-[44px] py-2 rounded-lg bg-gray-100 border border-gray-200 font-black active:bg-blue-100" }, n))),
+        React.createElement("div", { className: "mt-2 space-y-2" },
+            React.createElement(QuantityInput, { value: qty, onChange: setQty }),
+            React.createElement("button", { disabled:saving, onClick: save, className: `w-full min-h-[50px] px-4 rounded-xl text-white font-black disabled:opacity-40 ${type === 'in' ? 'bg-blue-600' : type === 'sale' ? 'bg-orange-600' : 'bg-violet-600'}` }, saving ? '記録中' : '確定')),
         React.createElement("div", { className: `text-xs mt-2 font-bold ${movementIsOut(type) && stockStage({...product,stock:Number(product.stock||0)-baseQty}) === 'critical' ? 'text-red-700' : movementIsOut(type) && stockStage({...product,stock:Number(product.stock||0)-baseQty}) === 'warning' ? 'text-amber-700' : 'text-gray-600'}` },
             `在庫反映: ${baseQty} ${product.unit || '個'} / 処理後 ${Math.round((Number(product.stock||0) + (movementIsOut(type)?-baseQty:baseQty))*1000)/1000} ${product.unit||'個'}`));
 }
