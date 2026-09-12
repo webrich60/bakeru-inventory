@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.4</title>
-  <!-- BAKERU_BUILD: 2.7.4-mobile-quantity-input -->
+  <title>BAKERU 商品・在庫管理 v2.7.5</title>
+  <!-- BAKERU_BUILD: 2.7.5-qr-preview-brand -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -66,7 +66,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.7.4
+  BAKERU 商品・在庫管理 v2.7.5
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -600,7 +600,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.4")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.5")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -897,25 +897,176 @@ function ProductQrManager({ product, onClose }) {
     const [shelfQrMm, setShelfQrMm] = useState(40);
     const [movementQrMm, setMovementQrMm] = useState(58);
     const [copies, setCopies] = useState(1);
+    const [previewMode, setPreviewMode] = useState('product');
+    const [accentColor, setAccentColor] = useState('#10b981');
+    const [borderColor, setBorderColor] = useState('#111827');
+    const [bgColor, setBgColor] = useState('#ffffff');
+    const managementNo = String(product.sku || product.id || '');
+    const detailText = [productContentText(product), product.category || '', product.shelf ? `保管: ${product.shelf}` : ''].filter(Boolean).join(' / ');
+    const hintText = 'QR自体には商品IDだけを保存し、商品名・内容量・仕入金額・棚位置などは商品マスターから呼び出します。';
+
+    const sizeOptions = {
+        product: [20, 24, 28, 32],
+        shelf: [32, 40, 50],
+        movement: [50, 58, 70]
+    };
+
+    const getModeMeta = (mode) => {
+        const common = {
+            product: { title: '商品貼付用', qrMm: productQrMm, pageSize: '58mm 40mm', labelW: 58, labelH: 40, note: '商品本体に貼る小さめラベル', recommended: '小さめで邪魔になりにくいサイズです。' },
+            shelf: { title: '棚管理用', qrMm: shelfQrMm, pageSize: '90mm 60mm', labelW: 90, labelH: 60, note: '棚・ケースに貼って在庫確認', recommended: '少し離れても読みやすい棚向けサイズです。' },
+            movement: { title: 'ラミネート入出庫カード用', qrMm: movementQrMm, pageSize: 'A6 portrait', labelW: 105, labelH: 148, note: '入庫・販売・使用に繰り返し使用', recommended: 'A6程度で印刷しラミネート運用がおすすめです。' }
+        };
+        return common[mode] || common.product;
+    };
+
+    const renderBrandBadge = (compact = false) => React.createElement("div", {
+        className: "inline-flex items-center gap-1 rounded-full font-black text-white",
+        style: {
+            background: accentColor,
+            padding: compact ? '3px 8px' : '5px 10px',
+            fontSize: compact ? '10px' : '12px',
+            letterSpacing: '0.08em'
+        }
+    }, React.createElement("span", {
+        style: {
+            display: 'inline-block',
+            width: compact ? '10px' : '12px',
+            height: compact ? '10px' : '12px',
+            borderRadius: '3px',
+            background: '#ffffff',
+            opacity: 0.92
+        }
+    }), 'BAKERU');
+
+    const PreviewLabel = ({ mode }) => {
+        const meta = getModeMeta(mode);
+        const specs = mode === 'product' ? [productContentText(product)].filter(Boolean).join(' / ') : detailText;
+        return React.createElement("div", { className: "overflow-x-auto" },
+            React.createElement("div", { className: "flex justify-center py-2" },
+                React.createElement("div", {
+                    className: "shadow-md",
+                    style: {
+                        width: `${meta.labelW}mm`,
+                        minHeight: `${meta.labelH}mm`,
+                        background: bgColor,
+                        border: `2px solid ${borderColor}`,
+                        borderRadius: '12px',
+                        padding: mode === 'product' ? '2.5mm' : '5mm',
+                        color: '#111827'
+                    }
+                },
+                    React.createElement("div", { className: "flex items-center justify-center mb-1.5" }, renderBrandBadge(mode === 'product')),
+                    React.createElement("div", {
+                        className: "font-black text-center",
+                        style: {
+                            fontSize: mode === 'product' ? '10px' : '14px',
+                            lineHeight: 1.2,
+                            color: borderColor
+                        }
+                    }, meta.title),
+                    React.createElement("div", {
+                        className: "font-black text-center mt-1",
+                        style: {
+                            fontSize: mode === 'movement' ? '22px' : mode === 'product' ? '12px' : '16px',
+                            lineHeight: 1.2
+                        }
+                    }, product.name),
+                    React.createElement("div", {
+                        className: "text-center font-semibold mt-1",
+                        style: {
+                            fontSize: mode === 'product' ? '9px' : '11px',
+                            lineHeight: 1.4,
+                            color: '#374151'
+                        }
+                    }, specs || ' '),
+                    mode !== 'product' && !!product.details && React.createElement("div", {
+                        className: "text-center mt-1 whitespace-pre-wrap",
+                        style: { fontSize: '10px', lineHeight: 1.4, color: '#4b5563' }
+                    }, product.details),
+                    React.createElement("div", { className: "flex justify-center", style: { marginTop: mode === 'product' ? '1mm' : '3mm' } },
+                        qrDataUrl
+                            ? React.createElement("img", {
+                                src: qrDataUrl,
+                                alt: `${product.name} QRコードプレビュー`,
+                                style: {
+                                    width: `${meta.qrMm}mm`,
+                                    height: `${meta.qrMm}mm`,
+                                    objectFit: 'contain',
+                                    background: '#ffffff'
+                                }
+                            })
+                            : React.createElement("div", { className: "p-4 text-red-700 font-bold text-xs" }, 'QR生成ライブラリを読み込めませんでした')),
+                    React.createElement("div", {
+                        className: "text-center font-mono font-black break-all mt-1",
+                        style: {
+                            fontSize: mode === 'product' ? '8px' : '10px',
+                            lineHeight: 1.35
+                        }
+                    }, `管理番号：${managementNo}`),
+                    React.createElement("div", {
+                        className: "text-center mt-1",
+                        style: {
+                            fontSize: mode === 'product' ? '7px' : '9px',
+                            lineHeight: 1.4,
+                            color: '#6b7280'
+                        }
+                    }, 'QR内容：商品IDのみ'),
+                    mode === 'movement' && React.createElement("div", {
+                        className: "mt-3 text-left rounded-lg",
+                        style: {
+                            border: `1.5px solid ${borderColor}`,
+                            padding: '3mm',
+                            fontSize: '12px',
+                            lineHeight: 1.6
+                        }
+                    }, React.createElement("b", null, '使い方'), React.createElement("br", null), '1. スマホでQRを読む', React.createElement("br", null), '2. 入庫 / 販売 / 使用を選ぶ', React.createElement("br", null), '3. 数量・単位を入力して確定'),
+                    React.createElement("div", {
+                        className: "text-center mt-2",
+                        style: {
+                            fontSize: mode === 'product' ? '7px' : '9px',
+                            lineHeight: 1.5,
+                            color: '#4b5563'
+                        }
+                    }, meta.recommended))));
+    };
+
+    const buildLabelHtml = (mode) => {
+        const meta = getModeMeta(mode);
+        const specs = mode === 'product' ? [productContentText(product)].filter(Boolean).join(' / ') : detailText;
+        const help = mode === 'movement' ? `<div class="steps"><b>使い方</b><br>1. スマホでQRを読む<br>2. 入庫 / 販売 / 使用を選ぶ<br>3. 数量・単位を入力して確定</div>` : '';
+        return `<div class="label ${mode}"><div class="brandBadge"><span class="brandIcon"></span><span class="brandText">BAKERU</span></div><div class="kind">${escapeHtml(meta.title)}</div><div class="name">${escapeHtml(product.name)}</div><div class="spec">${escapeHtml(specs || '')}</div>${mode!=='product' && product.details ? `<div class="details">${escapeHtml(product.details)}</div>` : ''}<img class="qr" src="${qrDataUrl}"><div class="id">管理番号：${escapeHtml(managementNo)}</div><div class="sub">QR内容：商品IDのみ</div>${help}<div class="note">${escapeHtml(hintText)}</div></div>`;
+    };
+
     const printLabel = (mode) => {
         if (!qrDataUrl) return toast('QRコードを生成できませんでした。ネット接続を確認してください。', 'error');
-        const managementNo = String(product.sku || product.id || '');
-        const specs = mode === 'product'
-            ? [productContentText(product)].filter(Boolean).join(' / ')
-            : [productContentText(product), product.category || '', product.shelf ? `保管: ${product.shelf}` : ''].filter(Boolean).join(' / ');
-        const title = mode === 'shelf' ? '棚管理QR' : mode === 'movement' ? '入庫・販売・使用 QRカード' : '商品管理QR';
-        const pageSize = mode === 'movement' ? 'A6 portrait' : mode === 'shelf' ? '90mm 60mm' : '58mm 40mm';
-        const qrMm = mode === 'movement' ? movementQrMm : mode === 'shelf' ? shelfQrMm : productQrMm;
+        const meta = getModeMeta(mode);
         const count = Math.max(1, Math.min(50, Number(copies || 1)));
-        const help = mode === 'movement' ? '<div class="steps"><b>使い方</b><br>1. スマホでQRを読む<br>2. 入庫 / 販売 / 使用を選ぶ<br>3. 数量・単位を入力して確定</div>' : '';
-        const labelHtml = `<div class="label"><div class="brand">BAKERU 商品・在庫管理</div><div class="kind">${title}</div><div class="name">${escapeHtml(product.name)}</div><div class="spec">${escapeHtml(specs)}</div>${mode!=='product' && product.details ? `<div class="details">${escapeHtml(product.details)}</div>` : ''}<img class="qr" src="${qrDataUrl}"><div class="id">管理番号：${escapeHtml(managementNo)}</div>${help}${mode!=='product'?'<div class="note">QRは商品IDだけに連結。商品詳細は商品マスターから呼び出します。</div>':''}</div>`;
-        const pages = Array.from({length: count}, () => labelHtml).join('');
-        const w = window.open('', '_blank', 'width=720,height=900');
+        const pages = Array.from({ length: count }, () => buildLabelHtml(mode)).join('');
+        const w = window.open('', '_blank', 'width=900,height=1100');
         if (!w) return toast('印刷画面を開けません。ポップアップを許可してください。', 'warn');
-        w.document.write(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${escapeHtml(product.name)} ${title}</title><style>
-            @page{size:${pageSize};margin:${mode==='product'?'3mm':'5mm'}}*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;margin:0;color:#111827}.label{border:2px solid #111827;border-radius:10px;padding:${mode==='product'?'2.5mm':'5mm'};text-align:center;min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;page-break-after:always}.label:last-child{page-break-after:auto}.brand{font-weight:900;font-size:${mode==='product'?'9px':'12px'};letter-spacing:.08em}.kind{font-weight:900;font-size:${mode==='product'?'10px':'14px'};margin:1mm 0}.name{font-size:${mode==='movement'?'22px':mode==='product'?'12px':'16px'};font-weight:900;line-height:1.2}.spec{font-size:${mode==='product'?'9px':'11px'};font-weight:700;margin-top:1mm}.details{font-size:10px;margin-top:1mm;max-width:90%;white-space:pre-wrap}.qr{width:${qrMm}mm;height:${qrMm}mm;object-fit:contain;margin:${mode==='product'?'1mm':'3mm'} auto}.id{font-family:monospace;font-size:${mode==='product'?'8px':'10px'};font-weight:800;word-break:break-all}.steps{margin-top:3mm;padding:3mm;border:1.5px solid #111827;border-radius:8px;text-align:left;font-size:12px;line-height:1.6;width:100%}.note{font-size:9px;margin-top:2mm}@media print{button{display:none}}</style></head><body>${pages}<script>window.onload=()=>setTimeout(()=>window.print(),250);window.onafterprint=()=>window.close();<\/script></body></html>`);
+        w.document.write(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${escapeHtml(product.name)} ${escapeHtml(meta.title)}</title><style>
+            @page{size:${meta.pageSize};margin:${mode==='product'?'3mm':'5mm'}}
+            *{box-sizing:border-box}
+            body{font-family:-apple-system,BlinkMacSystemFont,"Noto Sans JP",sans-serif;margin:0;color:#111827;background:#fff}
+            .label{border:2px solid ${borderColor};border-radius:12px;padding:${mode==='product'?'2.5mm':'5mm'};text-align:center;min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;page-break-after:always;background:${bgColor}}
+            .label:last-child{page-break-after:auto}
+            .brandBadge{display:inline-flex;align-items:center;gap:6px;padding:${mode==='product'?'3px 8px':'5px 10px'};border-radius:999px;background:${accentColor};color:#fff;font-weight:900;letter-spacing:.08em;font-size:${mode==='product'?'10px':'12px'}}
+            .brandIcon{display:inline-block;width:${mode==='product'?'10px':'12px'};height:${mode==='product'?'10px':'12px'};border-radius:3px;background:#fff;opacity:.92}
+            .kind{font-weight:900;font-size:${mode==='product'?'10px':'14px'};margin:1mm 0;color:${borderColor}}
+            .name{font-size:${mode==='movement'?'22px':mode==='product'?'12px':'16px'};font-weight:900;line-height:1.2}
+            .spec{font-size:${mode==='product'?'9px':'11px'};font-weight:700;margin-top:1mm;line-height:1.4}
+            .details{font-size:10px;margin-top:1mm;max-width:95%;white-space:pre-wrap;line-height:1.5}
+            .qr{width:${meta.qrMm}mm;height:${meta.qrMm}mm;object-fit:contain;margin:${mode==='product'?'1mm':'3mm'} auto;background:#fff}
+            .id{font-family:monospace;font-size:${mode==='product'?'8px':'10px'};font-weight:800;word-break:break-all;line-height:1.35}
+            .sub{font-size:${mode==='product'?'7px':'9px'};margin-top:1mm;color:#6b7280}
+            .steps{margin-top:3mm;padding:3mm;border:1.5px solid ${borderColor};border-radius:8px;text-align:left;font-size:12px;line-height:1.6;width:100%}
+            .note{font-size:${mode==='product'?'7px':'9px'};margin-top:2mm;line-height:1.5;color:#4b5563}
+            @media print{button{display:none}}
+        </style></head><body>${pages}<script>window.onload=()=>setTimeout(()=>window.print(),250);window.onafterprint=()=>window.close();<\/script></body></html>`);
         w.document.close();
     };
+
     const saveQr = () => {
         if (!qrDataUrl) return;
         const a = document.createElement('a');
@@ -923,34 +1074,62 @@ function ProductQrManager({ product, onClose }) {
         a.download = `BAKERU_QR_${String(product.sku || product.id).replace(/[^a-zA-Z0-9_-]/g, '_')}.gif`;
         a.click();
     };
+
     const SelectSize = ({ value, onChange, options }) => React.createElement("select", { value, onChange: e => onChange(Number(e.target.value)), className: "input font-bold" }, options.map(n => React.createElement("option", { key: n, value: n }, `${n}mm角`)));
+    const ModeButton = ({ mode, label }) => React.createElement("button", {
+        onClick: () => setPreviewMode(mode),
+        className: `px-3 py-2 rounded-xl font-black border-2 transition ${previewMode === mode ? 'text-white' : 'bg-white text-gray-700'}`,
+        style: previewMode === mode ? { background: accentColor, borderColor: accentColor } : { borderColor: '#d1d5db' }
+    }, label);
+
+    const previewMeta = getModeMeta(previewMode);
     return React.createElement(Card, { className: "p-5 border-emerald-300 bg-emerald-50/40" },
         React.createElement("div", { className: "flex items-start justify-between gap-3" },
             React.createElement("div", null,
-                React.createElement("div", { className: "text-xs font-black text-emerald-700" }, "BAKERU専用 商品QR"),
+                React.createElement("div", { className: "text-xs font-black text-emerald-700" }, "BAKERU専用 QR作成・印刷"),
                 React.createElement("h3", { className: "text-xl font-black mt-1" }, product.name),
                 React.createElement("div", { className: "text-sm text-gray-600 mt-1" }, "内容量: ", productContentText(product), product.shelf ? ` / 棚: ${product.shelf}` : '')),
             React.createElement("button", { onClick: onClose, className: "w-10 h-10 rounded-xl bg-white border-2 border-gray-200 flex items-center justify-center" }, React.createElement(X, { size: 18 }))),
-        React.createElement("div", { className: "grid md:grid-cols-[220px_1fr] gap-5 mt-4 items-start" },
-            React.createElement("div", { className: "bg-white p-4 rounded-2xl border-2 border-gray-200 text-center" },
-                qrDataUrl ? React.createElement("img", { src: qrDataUrl, alt: `${product.name} QRコード`, className: "w-full max-w-[190px] mx-auto" }) : React.createElement("div", { className: "p-8 text-red-700 font-bold" }, "QR生成ライブラリを読み込めませんでした"),
-                React.createElement("div", { className: "font-mono text-xs break-all mt-2 text-gray-700 font-black" }, `管理番号：${product.sku || product.id}`),
-                React.createElement("div", { className: "text-[11px] text-gray-500 mt-2 break-all" }, `QR内容：BAKERU商品ID ${product.id}`)),
-            React.createElement("div", { className: "space-y-3" },
-                React.createElement("div", { className: "p-3 rounded-xl bg-white border border-emerald-200 text-sm leading-7" },
-                    React.createElement("b", null, "重要：QRに入るのは商品IDだけです。"),
-                    React.createElement("div", null, "商品名・グラム数・特徴・仕入金額・販売金額・棚位置・現在庫などはQRには固定保存しません。BAKERUの商品マスターに保存し、読み取ったIDを使って最新情報を表示します。")),
-                React.createElement("div", { className: "grid sm:grid-cols-2 lg:grid-cols-4 gap-2" },
-                    React.createElement(Field, { label: "商品貼付QRサイズ" }, React.createElement(SelectSize, { value: productQrMm, onChange: setProductQrMm, options: [20,24,28,32] })),
-                    React.createElement(Field, { label: "棚QRサイズ" }, React.createElement(SelectSize, { value: shelfQrMm, onChange: setShelfQrMm, options: [32,40,50] })),
-                    React.createElement(Field, { label: "ラミネートQRサイズ" }, React.createElement(SelectSize, { value: movementQrMm, onChange: setMovementQrMm, options: [50,58,70] })),
-                    React.createElement(Field, { label: "印刷枚数" }, React.createElement("select", { value: copies, onChange: e => setCopies(Number(e.target.value)), className: "input font-bold" }, [1,2,5,10,20].map(n => React.createElement("option", { key: n, value: n }, `${n}枚`))))),
+        React.createElement("div", { className: "p-3 mt-4 rounded-xl bg-white border border-emerald-200 text-sm leading-7" },
+            React.createElement("b", null, "作成前プレビューで見た目を確認できます。"),
+            React.createElement("div", null, '商品貼付用・棚用・ラミネート入出庫カード用を切り替えながら、サイズ・色・管理番号・BAKERUロゴの見え方を事前に確認できます。QR自体は読み取り精度を優先して黒のまま、ブランド色はロゴや枠で反映します。')),
+        React.createElement("div", { className: "grid xl:grid-cols-[380px_1fr] gap-5 mt-4 items-start" },
+            React.createElement("div", { className: "space-y-4" },
+                React.createElement("div", { className: "bg-white p-4 rounded-2xl border-2 border-gray-200" },
+                    React.createElement("div", { className: "font-black mb-3" }, '作成設定'),
+                    React.createElement("div", { className: "grid grid-cols-1 gap-3" },
+                        React.createElement(Field, { label: '商品貼付QRサイズ' }, React.createElement(SelectSize, { value: productQrMm, onChange: setProductQrMm, options: sizeOptions.product })),
+                        React.createElement(Field, { label: '棚QRサイズ' }, React.createElement(SelectSize, { value: shelfQrMm, onChange: setShelfQrMm, options: sizeOptions.shelf })),
+                        React.createElement(Field, { label: 'ラミネートQRサイズ' }, React.createElement(SelectSize, { value: movementQrMm, onChange: setMovementQrMm, options: sizeOptions.movement })),
+                        React.createElement(Field, { label: '印刷枚数' }, React.createElement("select", { value: copies, onChange: e => setCopies(Number(e.target.value)), className: "input font-bold" }, [1, 2, 5, 10, 20].map(n => React.createElement("option", { key: n, value: n }, `${n}枚`)))),
+                        React.createElement(Field, { label: 'BAKERUロゴ色' }, React.createElement("input", { type: 'color', value: accentColor, onChange: e => setAccentColor(e.target.value), className: "input h-12 p-2" })),
+                        React.createElement(Field, { label: '枠線色' }, React.createElement("input", { type: 'color', value: borderColor, onChange: e => setBorderColor(e.target.value), className: "input h-12 p-2" })),
+                        React.createElement(Field, { label: '背景色' }, React.createElement("input", { type: 'color', value: bgColor, onChange: e => setBgColor(e.target.value), className: "input h-12 p-2" })))),
+                React.createElement("div", { className: "bg-white p-4 rounded-2xl border-2 border-gray-200 text-sm leading-7 text-gray-700" },
+                    React.createElement("div", { className: "font-black text-gray-900 mb-2" }, '表示される情報'),
+                    React.createElement("div", null, `管理番号：${managementNo}`),
+                    React.createElement("div", null, `商品名：${product.name}`),
+                    React.createElement("div", null, `内容量：${productContentText(product) || '未設定'}`),
+                    React.createElement("div", null, `棚位置：${product.shelf || '未設定'}`),
+                    React.createElement("div", { className: 'text-xs text-gray-500 mt-2 leading-6' }, hintText))),
+            React.createElement("div", { className: "space-y-4" },
+                React.createElement("div", { className: "bg-white p-4 rounded-2xl border-2 border-gray-200" },
+                    React.createElement("div", { className: "flex flex-wrap items-center gap-2 justify-between" },
+                        React.createElement("div", null,
+                            React.createElement("div", { className: "font-black" }, '作成前プレビュー'),
+                            React.createElement("div", { className: "text-sm text-gray-600 mt-1" }, `${previewMeta.title} / QR ${previewMeta.qrMm}mm / ラベル目安 ${previewMeta.labelW}×${previewMeta.labelH}mm`)),
+                        React.createElement("div", { className: "flex flex-wrap gap-2" },
+                            React.createElement(ModeButton, { mode: 'product', label: '商品貼付用' }),
+                            React.createElement(ModeButton, { mode: 'shelf', label: '棚用' }),
+                            React.createElement(ModeButton, { mode: 'movement', label: 'ラミネート用' }))),
+                    React.createElement("div", { className: "mt-4 p-4 rounded-2xl border border-dashed border-gray-300 bg-gray-50" }, React.createElement(PreviewLabel, { mode: previewMode })),
+                    React.createElement("div", { className: "mt-3 text-xs text-gray-500 leading-6" }, '※ 画面上の見た目は目安です。印刷時は指定mmサイズで出力されます。QRの中身は商品IDのみ、下部には管理番号を表示し、ロゴとしてBAKERUバッジを入れています。')),
                 React.createElement("div", { className: "grid sm:grid-cols-3 gap-2" },
                     React.createElement("button", { onClick: () => printLabel('product'), className: "py-3 rounded-xl bg-blue-600 text-white font-black flex items-center justify-center gap-2" }, React.createElement(Printer, { size: 17 }), `商品貼付用 ${productQrMm}mm`),
                     React.createElement("button", { onClick: () => printLabel('shelf'), className: "py-3 rounded-xl bg-emerald-600 text-white font-black flex items-center justify-center gap-2" }, React.createElement(Printer, { size: 17 }), `棚用 ${shelfQrMm}mm`),
                     React.createElement("button", { onClick: () => printLabel('movement'), className: "py-3 rounded-xl bg-gray-900 text-white font-black flex items-center justify-center gap-2" }, React.createElement(Printer, { size: 17 }), `入出庫カード ${movementQrMm}mm`)),
-                React.createElement("button", { onClick: saveQr, className: "w-full py-2.5 rounded-xl border-2 border-gray-300 bg-white font-bold flex items-center justify-center gap-2" }, React.createElement(Download, { size: 17 }), "QR画像だけ保存"),
-                React.createElement("div", { className: "text-xs text-gray-600 leading-6" }, "商品貼付用は小さめ、棚用は中サイズ、入出庫カードはA6程度に印刷してラミネートする運用を想定しています。同じ商品なら何枚印刷してもQRの商品IDは同じです。"))));
+                React.createElement("button", { onClick: saveQr, className: "w-full py-2.5 rounded-xl border-2 border-gray-300 bg-white font-bold flex items-center justify-center gap-2" }, React.createElement(Download, { size: 17 }), 'QR画像だけ保存'),
+                React.createElement("div", { className: "text-xs text-gray-600 leading-6" }, '商品貼付用は20〜32mm、棚用は32〜50mm、ラミネート入出庫カード用は50〜70mmで調整できます。同じ商品なら何枚印刷してもQRの商品IDは同じなので、詳細を変えても印刷済みQRをそのまま使えます。'))));
 }
 
 function QuantityInput({ value, onChange, className = '' }) {
@@ -1307,7 +1486,7 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
-// v2.7.4: Standard OCR first, Gemini only for ambiguous OCR text; mobile quantity input improved.
+// v2.7.5: QR preview before print, color controls, BAKERU branding badge, and print design improvements.
 let __bakeruTesseractLoader = null;
 let __bakeruOcrWorkerPromise = null;
 let __bakeruOcrProgressHandler = null;
