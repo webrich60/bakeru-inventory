@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.9</title>
-  <!-- BAKERU_BUILD: 2.7.9-content-amount-input -->
+  <title>BAKERU 商品・在庫管理 v2.7.10</title>
+  <!-- BAKERU_BUILD: 2.7.10-content-amount-input -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -66,7 +66,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.7.9
+  BAKERU 商品・在庫管理 v2.7.10
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -600,7 +600,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.9")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.10")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -891,17 +891,44 @@ function ProductForm({ product, onSave, onCancel }) {
     };
 
     const UnitEntry = ({ value, onChange, options = UNIT_OPTIONS, placeholder = '単位を入力' }) => {
-        const listId = React.useMemo(() => `unit_${Math.random().toString(36).slice(2)}`, []);
-        return React.createElement(React.Fragment, null,
-            React.createElement("input", {
-                type: "text",
-                list: listId,
-                value: value || '',
-                onChange: e => onChange(e.target.value),
-                className: "input",
-                placeholder
-            }),
-            React.createElement("datalist", { id: listId }, options.map(u => React.createElement("option", { key: u, value: u }))));
+        const [open, setOpen] = useState(false);
+        const wrapRef = useRef(null);
+        useEffect(() => {
+            if (!open) return;
+            const close = (e) => {
+                if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+            };
+            document.addEventListener('pointerdown', close);
+            return () => document.removeEventListener('pointerdown', close);
+        }, [open]);
+        return React.createElement("div", { ref: wrapRef, className: "relative" },
+            React.createElement("div", { className: "flex items-stretch" },
+                React.createElement("input", {
+                    type: "text",
+                    value: value || '',
+                    onChange: e => onChange(e.target.value),
+                    onFocus: e => e.target.select(),
+                    className: "input rounded-r-none border-r-0",
+                    placeholder,
+                    autoComplete: "off"
+                }),
+                React.createElement("button", {
+                    type: "button",
+                    onClick: () => setOpen(v => !v),
+                    className: "w-14 shrink-0 rounded-r-xl border-2 border-gray-300 bg-white hover:bg-gray-50 font-black text-gray-800 flex items-center justify-center",
+                    "aria-label": "単位候補を表示"
+                }, open ? '▲' : '▼')),
+            open && React.createElement("div", {
+                className: "absolute left-0 right-0 z-[80] mt-1 max-h-64 overflow-y-auto rounded-xl border-2 border-gray-300 bg-white shadow-xl p-2"
+            },
+                React.createElement("div", { className: "px-2 py-1 text-xs font-bold text-gray-500" }, "単位を選択（候補にない場合は入力欄へ直接入力）"),
+                React.createElement("div", { className: "grid grid-cols-3 sm:grid-cols-4 gap-1 mt-1" },
+                    options.map(u => React.createElement("button", {
+                        key: u,
+                        type: "button",
+                        onClick: () => { onChange(u); setOpen(false); },
+                        className: `px-2 py-2 rounded-lg border text-sm font-bold ${String(value || '') === String(u) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-800 border-gray-200 hover:bg-blue-50'}`
+                    }, u)))));
     };
 
     const NumberWithUnit = ({ value, onValueChange, unit, onUnitChange, min = 0, step = 0.1, fallback = '0' }) =>
@@ -1576,7 +1603,7 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
-// v2.7.9: Product form is fully manually editable; quantity thresholds use 0.1 increments and editable units; current-stock edits persist with adjustment history.
+// v2.7.10: Product form is fully manually editable; quantity thresholds use 0.1 increments and editable units; current-stock edits persist with adjustment history.
 let __bakeruTesseractLoader = null;
 let __bakeruOcrWorkerPromise = null;
 let __bakeruOcrProgressHandler = null;
@@ -2265,3 +2292,4 @@ catch (err) {
   </script>
 </body>
 </html>
+<!-- v2.7.10: unit selector replaced with manual text + full custom dropdown so all unit options remain visible. -->
