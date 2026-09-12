@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.6</title>
-  <!-- BAKERU_BUILD: 2.7.6-content-amount-input -->
+  <title>BAKERU 商品・在庫管理 v2.7.8</title>
+  <!-- BAKERU_BUILD: 2.7.8-content-amount-input -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -66,7 +66,7 @@ const ICON_MAP = {
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
 const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
 /*
-  BAKERU 商品・在庫管理 v2.7.6
+  BAKERU 商品・在庫管理 v2.7.8
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -164,8 +164,8 @@ const normalizeText = (s = '') => String(s)
     .normalize('NFKC')
     .toLowerCase()
     .replace(/[\s　()（）・\-_/]/g, '');
-const UNIT_OPTIONS = ['個', 'g', 'kg', 'ml', 'L', '本', '枚', '袋', '箱', 'ケース'];
-const CONTENT_UNIT_OPTIONS = ['g', 'kg', 'ml', 'L', '個', '本', '枚', '袋', '箱', 'ケース'];
+const UNIT_OPTIONS = ['個', 'g', 'kg', 'ml', 'L', '本', '枚', '袋', '箱', 'ケース', 'パック', 'セット', '束'];
+const CONTENT_UNIT_OPTIONS = ['g', 'kg', 'ml', 'L', '個', '本', '枚', '袋', '箱', 'ケース', 'パック', 'セット', '束'];
 const BAKERU_QR_PREFIX = 'BAKERU:P:';
 const makeProductQrPayload = (product) => `${BAKERU_QR_PREFIX}${encodeURIComponent(String(product && product.id || ''))}`;
 const parseBakeruProductQr = (raw) => {
@@ -600,7 +600,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.6")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.8")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -836,57 +836,147 @@ function InventoryView({ inventory, saveProduct, onDelete }) {
     );
 }
 function ProductForm({ product, onSave, onCancel }) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
-    const [f, setF] = useState({ ...product, purchaseUnit: product.purchaseUnit || product.unit || '個', purchaseFactor: Number(product.purchaseFactor || 1), contentAmount: String(product.contentAmount ?? 0), contentUnit: product.contentUnit || 'g', details: product.details || '', shelf: product.shelf || '', warningStock: Number((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10)) });
+    var _a;
+    const toEditable = (v, fallback = 0) => String(v ?? fallback);
+    const toTenth = (v, fallback = 0) => {
+        const n = Number(v ?? fallback);
+        return String(Number.isFinite(n) ? Math.round(n * 10) / 10 : fallback);
+    };
+    const [f, setF] = useState({
+        ...product,
+        purchaseUnit: product.purchaseUnit || product.unit || '個',
+        purchaseFactor: toTenth(product.purchaseFactor, 1),
+        contentAmount: toTenth(product.contentAmount, 0),
+        contentUnit: product.contentUnit || 'g',
+        details: product.details || '',
+        shelf: product.shelf || '',
+        stock: toTenth(product.stock, 0),
+        warningStock: toTenth((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10), 10),
+        minStock: toTenth(product.minStock, 5),
+        cost: toEditable(product.cost, 0),
+        price: toEditable(product.price, 0)
+    });
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
     const warning = Number(f.warningStock || 0);
     const critical = Number(f.minStock || 0);
+
+    const NumberEntry = ({ value, onChange, min = 0, step = 0.1, fallback = '0', placeholder = '', suffix = '' }) => {
+        const normalize = raw => {
+            const text = String(raw ?? '').trim();
+            if (text === '') return fallback;
+            let n = Number(text);
+            if (!Number.isFinite(n)) return fallback;
+            if (n < min) n = min;
+            if (Number(step) === 0.1) n = Math.round(n * 10) / 10;
+            else if (Number(step) === 1) n = Math.round(n);
+            return String(n);
+        };
+        const input = React.createElement("input", {
+            type: "number",
+            min: String(min),
+            step: String(step),
+            inputMode: Number(step) === 1 ? "numeric" : "decimal",
+            value: value ?? '',
+            onFocus: e => setTimeout(() => e.target.select(), 0),
+            onClick: e => e.currentTarget.select(),
+            onChange: e => onChange(e.target.value),
+            onBlur: e => onChange(normalize(e.target.value)),
+            className: suffix ? "input flex-1 min-w-0" : "input",
+            placeholder
+        });
+        if (!suffix) return input;
+        return React.createElement("div", { className: "flex items-stretch gap-2" },
+            input,
+            React.createElement("div", { className: "px-4 rounded-xl border-2 border-gray-200 bg-gray-50 flex items-center justify-center font-black text-gray-700 whitespace-nowrap" }, suffix));
+    };
+
+    const UnitEntry = ({ value, onChange, options = UNIT_OPTIONS, placeholder = '単位を入力' }) => {
+        const listId = React.useMemo(() => `unit_${Math.random().toString(36).slice(2)}`, []);
+        return React.createElement(React.Fragment, null,
+            React.createElement("input", {
+                type: "text",
+                list: listId,
+                value: value || '',
+                onChange: e => onChange(e.target.value),
+                className: "input",
+                placeholder
+            }),
+            React.createElement("datalist", { id: listId }, options.map(u => React.createElement("option", { key: u, value: u }))));
+    };
+
+    const NumberWithUnit = ({ value, onValueChange, unit, onUnitChange, min = 0, step = 0.1, fallback = '0' }) =>
+        React.createElement("div", { className: "grid grid-cols-[minmax(0,1fr)_110px] gap-2" },
+            React.createElement(NumberEntry, { value, onChange: onValueChange, min, step, fallback }),
+            React.createElement(UnitEntry, { value: unit, onChange: onUnitChange }));
+
+    const normalizeForSave = () => ({
+        ...f,
+        unit: String(f.unit || '').trim() || '個',
+        purchaseUnit: String(f.purchaseUnit || '').trim() || String(f.unit || '').trim() || '個',
+        contentUnit: String(f.contentUnit || '').trim() || 'g',
+        contentAmount: Math.round(Number(f.contentAmount || 0) * 10) / 10,
+        purchaseFactor: Math.max(0.1, Math.round(Number(f.purchaseFactor || 0.1) * 10) / 10),
+        stock: Math.max(0, Math.round(Number(f.stock || 0) * 10) / 10),
+        warningStock: Math.max(0, Math.round(Number(f.warningStock || 0) * 10) / 10),
+        minStock: Math.max(0, Math.round(Number(f.minStock || 0) * 10) / 10),
+        cost: Math.max(0, Math.round(Number(f.cost || 0))),
+        price: Math.max(0, Math.round(Number(f.price || 0)))
+    });
+
     return React.createElement(Card, { className: "p-5 border-blue-300" },
         React.createElement("h3", { className: "font-extrabold text-lg mb-2" }, f.id ? '商品マスタ編集' : '新規商品登録'),
-        React.createElement("div", { className: "p-3 mb-4 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900" }, "在庫は「基準単位」で管理します。内容量・特徴・棚番号も登録すると、QR読取時に商品詳細として表示できます。QR自体には商品IDだけを入れるため、後から内容を変更してもQRの貼り替えは不要です。"),
+        React.createElement("div", { className: "p-3 mb-4 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900 leading-7" },
+            React.createElement("b", null, "このページ内の入力項目はすべて手動で変更できます。"),
+            React.createElement("div", null, "数値欄はクリックすると現在値を選択するので、そのまま入力して上書きできます。数量系は0.1刻みです。単位欄は候補から選ぶだけでなく、直接入力もできます。")),
         React.createElement("div", { className: "grid md:grid-cols-3 gap-4" },
             React.createElement(Field, { label: "商品名 *" },
-                React.createElement("input", { required: true, value: f.name, onChange: e => set('name', e.target.value), className: "input" })),
+                React.createElement("input", { required: true, value: f.name || '', onChange: e => set('name', e.target.value), className: "input" })),
             React.createElement(Field, { label: "SKU" },
                 React.createElement("input", { value: f.sku || '', onChange: e => set('sku', e.target.value), className: "input", placeholder: "未入力なら自動採番" })),
             React.createElement(Field, { label: "JAN / 1次元バーコード（ある場合）" },
-                React.createElement("input", { inputMode: "text", value: f.barcode || '', onChange: e => set('barcode', e.target.value.trim()), className: "input font-mono", placeholder: "ない商品は空欄でOK" })),
+                React.createElement("input", { inputMode: "text", value: f.barcode || '', onChange: e => set('barcode', e.target.value), className: "input font-mono", placeholder: "ない商品は空欄でOK" })),
             React.createElement(Field, { label: "カテゴリ" },
                 React.createElement("input", { value: f.category || '', onChange: e => set('category', e.target.value), className: "input" })),
             React.createElement(Field, { label: "内容量" },
-                React.createElement("input", { type: "number", min: "0", step: "0.1", inputMode: "decimal", value: (_b = f.contentAmount) !== null && _b !== void 0 ? _b : '0', onFocus: e => setTimeout(() => e.target.select(), 0), onChange: e => set('contentAmount', e.target.value), onBlur: () => { if (String(f.contentAmount ?? '').trim() === '') set('contentAmount', '0'); }, className: "input", placeholder: "例: 500 / 0.5" })),
-            React.createElement(Field, { label: "内容量の単位" },
-                React.createElement("select", { value: f.contentUnit || 'g', onChange: e => set('contentUnit', e.target.value), className: "input" }, CONTENT_UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
+                React.createElement(NumberEntry, { value: f.contentAmount, onChange: v => set('contentAmount', v), min: 0, step: 0.1, fallback: '0', placeholder: "例: 500 / 0.5" })),
+            React.createElement(Field, { label: "内容量の単位（選択・手入力）" },
+                React.createElement(UnitEntry, { value: f.contentUnit || 'g', onChange: v => set('contentUnit', v), options: CONTENT_UNIT_OPTIONS, placeholder: "g / kg / ml / L など" })),
             React.createElement(Field, { label: "棚・保管場所" },
                 React.createElement("input", { value: f.shelf || '', onChange: e => set('shelf', e.target.value), className: "input", placeholder: "例: 冷蔵庫A-2 / 棚B3" })),
-            React.createElement(Field, { label: "在庫の基準単位" },
-                React.createElement("select", { value: f.unit || '個', onChange: e => set('unit', e.target.value), className: "input" }, UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
-            React.createElement(Field, { label: "仕入単位" },
-                React.createElement("select", { value: f.purchaseUnit || f.unit || '個', onChange: e => set('purchaseUnit', e.target.value), className: "input" }, UNIT_OPTIONS.map(u => React.createElement("option", { key: u }, u)))),
+            React.createElement(Field, { label: "在庫の基準単位（選択・手入力）" },
+                React.createElement(UnitEntry, { value: f.unit || '個', onChange: v => set('unit', v), placeholder: "個 / g / kg / 袋 など" })),
+            React.createElement(Field, { label: "仕入単位（選択・手入力）" },
+                React.createElement(UnitEntry, { value: f.purchaseUnit || f.unit || '個', onChange: v => set('purchaseUnit', v), placeholder: "袋 / 箱 / kg など" })),
             React.createElement(Field, { label: `1 ${f.purchaseUnit || '仕入単位'} あたりの ${f.unit || '基準単位'} 数` },
-                React.createElement("input", { type: "number", min: "0.001", step: "0.001", value: (_c = f.purchaseFactor) !== null && _c !== void 0 ? _c : 1, onChange: e => set('purchaseFactor', Number(e.target.value)), className: "input" })),
-            React.createElement(Field, { label: `現在庫（${f.unit || '個'}）` },
-                React.createElement("input", { type: "number", step: "0.001", value: (_d = f.stock) !== null && _d !== void 0 ? _d : 0, onChange: e => set('stock', Number(e.target.value)), className: "input", disabled: !!f.id })),
-            React.createElement(Field, { label: `注意ライン（${f.unit || '個'}）` },
-                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_e = f.warningStock) !== null && _e !== void 0 ? _e : 10, onChange: e => set('warningStock', Number(e.target.value)), className: "input" })),
-            React.createElement(Field, { label: `レッドライン（${f.unit || '個'}）` },
-                React.createElement("input", { type: "number", min: "0", step: "0.001", value: (_f = f.minStock) !== null && _f !== void 0 ? _f : 5, onChange: e => set('minStock', Number(e.target.value)), className: "input" })),
+                React.createElement(NumberEntry, { value: f.purchaseFactor, onChange: v => set('purchaseFactor', v), min: 0.1, step: 0.1, fallback: '0.1' })),
+            React.createElement(Field, { label: "現在庫" },
+                React.createElement(NumberWithUnit, { value: f.stock, onValueChange: v => set('stock', v), unit: f.unit || '個', onUnitChange: v => set('unit', v), min: 0, step: 0.1, fallback: '0' })),
+            React.createElement(Field, { label: "注意ライン" },
+                React.createElement(NumberWithUnit, { value: f.warningStock, onValueChange: v => set('warningStock', v), unit: f.unit || '個', onUnitChange: v => set('unit', v), min: 0, step: 0.1, fallback: '0' })),
+            React.createElement(Field, { label: "レッドライン" },
+                React.createElement(NumberWithUnit, { value: f.minStock, onValueChange: v => set('minStock', v), unit: f.unit || '個', onUnitChange: v => set('unit', v), min: 0, step: 0.1, fallback: '0' })),
             React.createElement(Field, { label: "仕入単価" },
-                React.createElement("input", { type: "number", min: "0", value: (_g = f.cost) !== null && _g !== void 0 ? _g : 0, onChange: e => set('cost', Number(e.target.value)), className: "input" })),
+                React.createElement(NumberEntry, { value: f.cost, onChange: v => set('cost', v), min: 0, step: 1, fallback: '0', suffix: '円' })),
             React.createElement(Field, { label: "販売単価" },
-                React.createElement("input", { type: "number", min: "0", value: (_h = f.price) !== null && _h !== void 0 ? _h : 0, onChange: e => set('price', Number(e.target.value)), className: "input" })),
+                React.createElement(NumberEntry, { value: f.price, onChange: v => set('price', v), min: 0, step: 1, fallback: '0', suffix: '円' })),
             React.createElement(Field, { label: "通知Gmail（任意）" },
-                React.createElement("input", { type: "email", value: f.notifyEmail || '', onChange: e => set('notifyEmail', e.target.value.trim()), className: "input", placeholder: "任意：この商品の低在庫メール通知先" })),
+                React.createElement("input", { type: "email", value: f.notifyEmail || '', onChange: e => set('notifyEmail', e.target.value), className: "input", placeholder: "任意：この商品の低在庫メール通知先" })),
             React.createElement("div", { className: "md:col-span-3" },
                 React.createElement(Field, { label: "商品特徴・規格メモ" },
                     React.createElement("textarea", { value: f.details || '', onChange: e => set('details', e.target.value), className: "input min-h-[88px]", placeholder: "例: 岡山県産、深蒸し、要冷蔵、開封後は密封" }))),
             React.createElement("div", { className: "md:col-span-3" },
                 React.createElement(Field, { label: "別名・領収書表記（カンマ区切り）" },
                     React.createElement("input", { value: f.aliases || '', onChange: e => set('aliases', e.target.value), className: "input", placeholder: "例：抹茶BLEND, MATCHA POWDER" })))),
+        React.createElement("div", { className: "mt-3 p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-600 leading-6" }, "注意ライン・レッドライン・現在庫の単位は『在庫の基準単位』と共通です。たとえば在庫を袋で管理する商品なら『袋』、重量管理なら『g』や『kg』を入力してください。これによりアラート判定の単位がずれません。"),
         warning <= critical && React.createElement("div", { className: "mt-3 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm font-bold" }, "注意ラインはレッドラインより大きい数にしてください。"),
         React.createElement("div", { className: "flex flex-col-reverse sm:flex-row justify-end gap-2 mt-5" },
             React.createElement("button", { onClick: onCancel, className: "px-5 py-2.5 rounded-xl bg-gray-100 font-bold" }, "キャンセル"),
-            React.createElement("button", { onClick: () => { if (!String(f.name || '').trim()) return toast('商品名を入力してください。', 'warn'); if (Number(f.warningStock || 0) <= Number(f.minStock || 0)) return toast('注意ラインはレッドラインより大きくしてください。', 'warn'); onSave({ ...f, contentAmount: Number(f.contentAmount || 0) }); }, className: "px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2" },
+            React.createElement("button", { onClick: () => {
+                if (!String(f.name || '').trim()) return toast('商品名を入力してください。', 'warn');
+                if (!String(f.unit || '').trim()) return toast('在庫の基準単位を入力してください。', 'warn');
+                if (Number(f.warningStock || 0) <= Number(f.minStock || 0)) return toast('注意ラインはレッドラインより大きくしてください。', 'warn');
+                onSave(normalizeForSave());
+            }, className: "px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2" },
                 React.createElement(Save, { size: 18 }),
                 "保存")));
 }
@@ -1486,7 +1576,7 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
-// v2.7.6: Content amount supports direct manual typing and 0.1 spinner increments; QR preview/branding retained.
+// v2.7.8: Product form is fully manually editable; quantity thresholds use 0.1 increments and editable units; current-stock edits persist with adjustment history.
 let __bakeruTesseractLoader = null;
 let __bakeruOcrWorkerPromise = null;
 let __bakeruOcrProgressHandler = null;
