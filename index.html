@@ -600,7 +600,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.3")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.4")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -1307,7 +1307,7 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
-// v2.7.3: Standard OCR first, Gemini only for ambiguous OCR text.
+// v2.7.4: Standard OCR first, Gemini only for ambiguous OCR text; mobile quantity input improved.
 let __bakeruTesseractLoader = null;
 let __bakeruOcrWorkerPromise = null;
 let __bakeruOcrProgressHandler = null;
