@@ -7,8 +7,8 @@
   <meta name="googlebot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="bingbot" content="noindex,nofollow,noarchive,nosnippet,noimageindex" />
   <meta name="theme-color" content="#111827" />
-  <title>BAKERU 商品・在庫管理 v2.7.10</title>
-  <!-- BAKERU_BUILD: 2.7.10-content-amount-input -->
+  <title>BAKERU 商品・在庫管理 v2.7.13</title>
+  <!-- BAKERU_BUILD: 2.7.13-supplier-optimization -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
   <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
@@ -61,12 +61,12 @@ const ICON_MAP = {
     RefreshCw: 'rotate', Download: 'download', Database: 'database', Wifi: 'wifi', WifiOff: 'ban',
     ClipboardCheck: 'clipboard-check', Barcode: 'barcode', Save: 'floppy-disk', FileSpreadsheet: 'table',
     Link2: 'link', Menu: 'bars', X: 'xmark', Trash2: 'trash', RotateCcw: 'rotate-left', Check: 'check',
-    Minus: 'minus', PlusCircle: 'circle-plus', Cloud: 'cloud', CloudOff: 'cloud', QrCode: 'qrcode', Printer: 'print', Tag: 'tag'
+    Minus: 'minus', PlusCircle: 'circle-plus', Cloud: 'cloud', CloudOff: 'cloud', QrCode: 'qrcode', Printer: 'print', Tag: 'tag', Truck: 'truck'
 };
 const makeIcon = (name) => ({ size = 24, className = '', style = {}, ...props }) => (React.createElement("i", { "aria-hidden": "true", className: `fa-solid fa-${ICON_MAP[name] || 'circle'} ${className}`, style: { fontSize: size, width: size, minWidth: size, height: size, lineHeight: `${size}px`, textAlign: 'center', ...style }, ...props }));
-const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag');
+const LayoutDashboard = makeIcon('LayoutDashboard'), Package = makeIcon('Package'), ShoppingCart = makeIcon('ShoppingCart'), Scan = makeIcon('Scan'), BrainCircuit = makeIcon('BrainCircuit'), Bell = makeIcon('Bell'), Settings = makeIcon('Settings'), Plus = makeIcon('Plus'), AlertTriangle = makeIcon('AlertTriangle'), CheckCircle2 = makeIcon('CheckCircle2'), Search = makeIcon('Search'), Upload = makeIcon('Upload'), Camera = makeIcon('Camera'), RefreshCw = makeIcon('RefreshCw'), Download = makeIcon('Download'), Database = makeIcon('Database'), Wifi = makeIcon('Wifi'), WifiOff = makeIcon('WifiOff'), ClipboardCheck = makeIcon('ClipboardCheck'), Barcode = makeIcon('Barcode'), Save = makeIcon('Save'), FileSpreadsheet = makeIcon('FileSpreadsheet'), Link2 = makeIcon('Link2'), Menu = makeIcon('Menu'), X = makeIcon('X'), Trash2 = makeIcon('Trash2'), RotateCcw = makeIcon('RotateCcw'), Check = makeIcon('Check'), Minus = makeIcon('Minus'), PlusCircle = makeIcon('PlusCircle'), Cloud = makeIcon('Cloud'), CloudOff = makeIcon('CloudOff'), QrCode = makeIcon('QrCode'), Printer = makeIcon('Printer'), Tag = makeIcon('Tag'), Truck = makeIcon('Truck');
 /*
-  BAKERU 商品・在庫管理 v2.7.10
+  BAKERU 商品・在庫管理 v2.7.13
   - Google Apps Script + Google Sheets を正本データとして使用
   - Gemini API キーはフロントに置かず、GAS Script Properties に保存
   - 1次元バーコード検品 / 領収書OCR / 差異監視 / 棚卸 / NEKKO連携用JSON出力
@@ -333,6 +333,9 @@ function App() {
     const [inventory, setInventory] = useState([]);
     const [transactions, setTransactions] = useState([]);
     const [alerts, setAlerts] = useState([]);
+    const [suppliers, setSuppliers] = useState([]);
+    const [supplierRecords, setSupplierRecords] = useState([]);
+    const [supplierTotals, setSupplierTotals] = useState([]);
     const [gasUrl, setGasUrl] = useState('');
     const [syncToken, setSyncToken] = useState('');
     const [configReady, setConfigReady] = useState(false);
@@ -364,13 +367,22 @@ function App() {
             setTransactions(data.transactions);
         if (Array.isArray(data.alerts))
             setAlerts(data.alerts);
+        if (Array.isArray(data.suppliers))
+            setSuppliers(data.suppliers);
+        if (Array.isArray(data.supplierRecords))
+            setSupplierRecords(data.supplierRecords);
+        if (Array.isArray(data.supplierTotals))
+            setSupplierTotals(data.supplierTotals);
     }, []);
     const api = useCallback(async (action, payload = {}, options = {}) => {
         // STEP3: 本番APIとテスト専用APIを明示的に分離。
         const testActionMap = {
             bootstrap: 'testBootstrap',
             upsertProduct: 'testUpsertProduct',
-            recordMovement: 'testRecordMovement'
+            recordMovement: 'testRecordMovement',
+            upsertSupplier: 'testUpsertSupplier',
+            deleteSupplier: 'testDeleteSupplier',
+            optimizeReorder: 'testOptimizeReorder'
         };
         const blockedInTest = new Set([
             'deleteProduct', 'commitReceipt', 'saveStocktake', 'resolveAlert',
@@ -465,7 +477,8 @@ function App() {
     }, [configReady, gasUrl, syncToken]);
     const saveProduct = async (product) => {
         var _a;
-        const local = { ...product, id: product.id || uid('prod'), updatedAt: Date.now() };
+        const local = { ...product, id: product.id || uid('prod'), supplier: String(product.supplier || '').trim(), updatedAt: Date.now() };
+        if (local.supplier) setSuppliers(prev => Array.from(new Set([...(Array.isArray(prev) ? prev : []), local.supplier])).sort((a,b) => String(a).localeCompare(String(b), 'ja')));
         setInventory(prev => {
             const idx = prev.findIndex(x => x.id === local.id);
             return idx >= 0 ? prev.map(x => x.id === local.id ? local : x) : [...prev, local];
@@ -530,10 +543,11 @@ function App() {
         ['transactions', '入出庫', ShoppingCart],
         ['stocktake', '棚卸', ClipboardCheck],
         ['analysis', 'AI分析', BrainCircuit],
+        ['suppliers', '仕入先管理', Truck],
         ['settings', '設定・連携', Settings]
     ];
     const pageTitle = ((_a = nav.find(n => n[0] === activeTab)) === null || _a === void 0 ? void 0 : _a[1]) || 'BAKERU';
-    const commonProps = { inventory, setInventory, transactions, setTransactions, alerts, setAlerts, api, saveProduct, recordMovement, pullFromSheet, testMode };
+    const commonProps = { inventory, setInventory, transactions, setTransactions, alerts, setAlerts, suppliers, supplierRecords, supplierTotals, api, saveProduct, recordMovement, pullFromSheet, testMode };
     return (React.createElement("div", { className: "min-h-screen bg-gray-50 text-gray-900 font-sans md:flex" },
         React.createElement("aside", { className: "hidden md:flex w-64 bg-gray-950 text-white h-screen flex-col fixed inset-y-0 left-0 z-30 overflow-hidden" },
             React.createElement(Brand, null),
@@ -575,6 +589,7 @@ function App() {
                 activeTab === 'transactions' && React.createElement(TransactionsView, { ...commonProps }),
                 activeTab === 'stocktake' && React.createElement(StocktakeView, { ...commonProps }),
                 activeTab === 'analysis' && React.createElement(AnalysisView, { ...commonProps }),
+                activeTab === 'suppliers' && React.createElement(SupplierManagementView, { ...commonProps }),
                 activeTab === 'settings' && React.createElement(SettingsView, { gasUrl: gasUrl, setGasUrl: setGasUrl, syncToken: syncToken, setSyncToken: setSyncToken, connection: connection, api: api, pullFromSheet: pullFromSheet, flushQueue: flushQueue, inventory: inventory }))),
         React.createElement("nav", { className: "md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t-2 border-gray-200 grid grid-cols-5 shadow-[0_-3px_12px_rgba(0,0,0,.08)]" }, [
             ['dashboard', 'ホーム', LayoutDashboard], ['scan', 'スキャン', Scan], ['inventory', '在庫', Package], ['stocktake', '棚卸', ClipboardCheck], ['settings', '設定', Settings]
@@ -600,7 +615,7 @@ function Brand() {
             React.createElement(Package, { className: "text-emerald-400" })),
         React.createElement("div", null,
             React.createElement("div", { className: "text-xl font-black tracking-wider text-emerald-400" }, "BAKERU"),
-            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.10")));
+            React.createElement("div", { className: "text-xs text-gray-300" }, "\u5546\u54C1\u30FB\u5728\u5EAB\u7BA1\u7406 v2.7.13")));
 }
 function ConnectionBadge({ status }) {
     const on = status === 'online';
@@ -760,16 +775,21 @@ function QrCenterView({ inventory }) {
         React.createElement("div", { className: "grid sm:grid-cols-2 xl:grid-cols-3 gap-3" }, cards.length ? cards : empty)
     );
 }
-function InventoryView({ inventory, saveProduct, onDelete }) {
+function InventoryView({ inventory, suppliers = [], saveProduct, onDelete }) {
     const [search, setSearch] = useState('');
     const [editing, setEditing] = useState(null);
     const [qrProduct, setQrProduct] = useState(null);
     const filtered = inventory.filter(x =>
         normalizeText(x.name).includes(normalizeText(search)) ||
         String(x.barcode || '').includes(search) || String(x.sku || '').includes(search) ||
-        normalizeText(x.details || '').includes(normalizeText(search)) || normalizeText(x.shelf || '').includes(normalizeText(search))
+        normalizeText(x.details || '').includes(normalizeText(search)) || normalizeText(x.shelf || '').includes(normalizeText(search)) ||
+        normalizeText(x.supplier || '').includes(normalizeText(search))
     );
-    const newProduct = () => setEditing({ id: '', sku: '', barcode: '', name: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, contentAmount: 0, contentUnit: 'g', details: '', shelf: '', stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '' });
+    const supplierOptions = Array.from(new Set([
+        ...(Array.isArray(suppliers) ? suppliers : []),
+        ...inventory.map(x => String(x.supplier || '').trim()).filter(Boolean)
+    ])).sort((a,b) => String(a).localeCompare(String(b), 'ja'));
+    const newProduct = () => setEditing({ id: '', sku: '', barcode: '', name: '', category: '', unit: '個', purchaseUnit: '個', purchaseFactor: 1, contentAmount: 0, contentUnit: 'g', details: '', shelf: '', stock: 0, warningStock: 10, minStock: 5, cost: 0, price: 0, notifyEmail: '', aliases: '', supplier: '' });
     const desktopRows = filtered.map(x => React.createElement("tr", { key: x.id, className: "hover:bg-gray-50" },
         React.createElement(Td, null,
             React.createElement("div", { className: "font-bold" }, x.name),
@@ -778,6 +798,8 @@ function InventoryView({ inventory, saveProduct, onDelete }) {
         React.createElement(Td, null,
             React.createElement("div", { className: "font-bold" }, productContentText(x)),
             React.createElement("div", { className: "text-xs text-gray-500" }, x.shelf ? `棚: ${x.shelf}` : (x.details || '詳細未設定'))),
+        React.createElement(Td, null,
+            x.supplier ? React.createElement("span", { className: "inline-flex px-2 py-1 rounded-full bg-amber-100 text-amber-900 font-bold text-xs" }, x.supplier) : React.createElement("span", { className: "text-gray-400" }, "未設定")),
         React.createElement(Td, null, React.createElement(StockBadge, { x })),
         React.createElement(Td, null,
             React.createElement("div", { className: "text-amber-700 font-bold" }, "注意 ", getWarningStock(x)),
@@ -795,6 +817,7 @@ function InventoryView({ inventory, saveProduct, onDelete }) {
             React.createElement("div", { className: "min-w-0" },
                 React.createElement("div", { className: "font-extrabold text-base" }, x.name),
                 React.createElement("div", { className: "text-xs text-gray-500 mt-1" }, "SKU: ", x.sku || '-', " / JAN: ", x.barcode || '-'),
+                x.supplier && React.createElement("div", { className: "text-xs font-bold text-amber-800 mt-1" }, "仕入先: ", x.supplier),
                 React.createElement("div", { className: "text-sm font-bold mt-1" }, productContentText(x), x.shelf ? ` / 棚 ${x.shelf}` : '')),
             React.createElement(StockBadge, { x })),
         x.details && React.createElement("div", { className: "mt-2 text-sm text-gray-700" }, x.details),
@@ -810,21 +833,22 @@ function InventoryView({ inventory, saveProduct, onDelete }) {
         React.createElement("div", { className: "flex flex-col md:flex-row gap-3 justify-between" },
             React.createElement("div", { className: "relative flex-1 max-w-xl" },
                 React.createElement(Search, { className: "absolute left-3 top-3 text-gray-400", size: 20 }),
-                React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "商品名・SKU・JAN・特徴・棚で検索", className: "w-full pl-10 pr-4 py-2.5 rounded-xl border-2 border-gray-300 focus:border-blue-600 outline-none" })),
+                React.createElement("input", { value: search, onChange: e => setSearch(e.target.value), placeholder: "商品名・SKU・JAN・仕入先・特徴・棚で検索", className: "w-full pl-10 pr-4 py-2.5 rounded-xl border-2 border-gray-300 focus:border-blue-600 outline-none" })),
             React.createElement("button", { onClick: newProduct, className: "bg-blue-600 hover:bg-blue-700 text-white font-bold px-5 py-2.5 rounded-xl flex items-center justify-center gap-2" }, React.createElement(Plus, { size: 19 }), "商品登録")),
         React.createElement("div", { className: "p-3 rounded-xl bg-emerald-50 border-2 border-emerald-200 text-sm text-emerald-900" },
             React.createElement("b", null, "QR運用: "),
             "バーコードがない商品は、登録後にBAKERU専用QRを作成できます。商品貼付・棚貼付・ラミネート入出庫カードの3種類を同じ商品IDで利用できます。"),
-        editing && React.createElement(ProductForm, { product: editing, onCancel: () => setEditing(null), onSave: async (p) => { const saved = await saveProduct(p); setEditing(null); setQrProduct(saved); toast('商品マスタを保存しました。QRを作成できます。'); } }),
+        editing && React.createElement(ProductForm, { product: editing, supplierOptions: supplierOptions, onCancel: () => setEditing(null), onSave: async (p) => { const saved = await saveProduct(p); setEditing(null); setQrProduct(saved); toast('商品マスタを保存しました。QRを作成できます。'); } }),
         qrProduct && React.createElement(ProductQrManager, { product: qrProduct, onClose: () => setQrProduct(null) }),
         React.createElement(Card, { className: "overflow-hidden" },
             React.createElement("div", { className: "hidden md:block overflow-x-auto" },
-                React.createElement("table", { className: "w-full text-sm min-w-[980px]" },
+                React.createElement("table", { className: "w-full text-sm min-w-[1080px]" },
                     React.createElement("thead", { className: "bg-gray-100 border-b-2 border-gray-200" },
                         React.createElement("tr", null,
                             React.createElement(Th, null, "商品 / SKU"),
                             React.createElement(Th, null, "JAN・バーコード"),
                             React.createElement(Th, null, "規格 / 棚"),
+                            React.createElement(Th, null, "仕入先"),
                             React.createElement(Th, null, "現在庫"),
                             React.createElement(Th, null, "注意 / レッド"),
                             React.createElement(Th, null, "仕入単価"),
@@ -835,7 +859,7 @@ function InventoryView({ inventory, saveProduct, onDelete }) {
             !filtered.length && React.createElement(Empty, { text: "該当する商品がありません。" }))
     );
 }
-function ProductForm({ product, onSave, onCancel }) {
+function ProductForm({ product, supplierOptions = [], onSave, onCancel }) {
     var _a;
     const toEditable = (v, fallback = 0) => String(v ?? fallback);
     const toTenth = (v, fallback = 0) => {
@@ -850,6 +874,7 @@ function ProductForm({ product, onSave, onCancel }) {
         contentUnit: product.contentUnit || 'g',
         details: product.details || '',
         shelf: product.shelf || '',
+        supplier: product.supplier || '',
         stock: toTenth(product.stock, 0),
         warningStock: toTenth((_a = product.warningStock) !== null && _a !== void 0 ? _a : Math.max(Number(product.minStock || 5) * 2, 10), 10),
         minStock: toTenth(product.minStock, 5),
@@ -941,6 +966,7 @@ function ProductForm({ product, onSave, onCancel }) {
         unit: String(f.unit || '').trim() || '個',
         purchaseUnit: String(f.purchaseUnit || '').trim() || String(f.unit || '').trim() || '個',
         contentUnit: String(f.contentUnit || '').trim() || 'g',
+        supplier: String(f.supplier || '').trim(),
         contentAmount: Math.round(Number(f.contentAmount || 0) * 10) / 10,
         purchaseFactor: Math.max(0.1, Math.round(Number(f.purchaseFactor || 0.1) * 10) / 10),
         stock: Math.max(0, Math.round(Number(f.stock || 0) * 10) / 10),
@@ -954,7 +980,7 @@ function ProductForm({ product, onSave, onCancel }) {
         React.createElement("h3", { className: "font-extrabold text-lg mb-2" }, f.id ? '商品マスタ編集' : '新規商品登録'),
         React.createElement("div", { className: "p-3 mb-4 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-900 leading-7" },
             React.createElement("b", null, "このページ内の入力項目はすべて手動で変更できます。"),
-            React.createElement("div", null, "数値欄はクリックすると現在値を選択するので、そのまま入力して上書きできます。数量系は0.1刻みです。単位欄は『個・袋・包・箱・ケース・パック・本・瓶・缶・ボトル・ティーバッグ・g・kg・ml・L』などから選べ、候補にない単位も直接入力できます。")),
+            React.createElement("div", null, "数値欄はクリックすると現在値を選択するので、そのまま入力して上書きできます。数量系は0.1刻みです。単位欄は『個・袋・包・箱・ケース・パック・本・瓶・缶・ボトル・ティーバッグ・g・kg・ml・L』などから選べ、候補にない単位も直接入力できます。仕入先も登録済み候補から選択するか、自由入力で追加できます。")),
         React.createElement("div", { className: "grid md:grid-cols-3 gap-4" },
             React.createElement(Field, { label: "商品名 *" },
                 React.createElement("input", { required: true, value: f.name || '', onChange: e => set('name', e.target.value), className: "input" })),
@@ -964,6 +990,16 @@ function ProductForm({ product, onSave, onCancel }) {
                 React.createElement("input", { inputMode: "text", value: f.barcode || '', onChange: e => set('barcode', e.target.value), className: "input font-mono", placeholder: "ない商品は空欄でOK" })),
             React.createElement(Field, { label: "カテゴリ" },
                 React.createElement("input", { value: f.category || '', onChange: e => set('category', e.target.value), className: "input" })),
+            React.createElement("div", { className: "md:col-span-3 p-4 rounded-2xl border-2 border-amber-200 bg-amber-50/60" },
+                React.createElement("div", { className: "flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2" },
+                    React.createElement("div", null,
+                        React.createElement("div", { className: "font-black text-amber-950" }, "仕入先"),
+                        React.createElement("div", { className: "text-xs text-amber-800 mt-1" }, "登録済みの仕入先を選ぶか、新しい仕入先名を直接入力できます。商品を保存すると次回から候補に追加されます。"))),
+                React.createElement("input", { value: f.supplier || '', onChange: e => set('supplier', e.target.value), className: "input bg-white", placeholder: "例：SABI / まぶち / めいらく / AMAZON / 業務スーパー" }),
+                supplierOptions.length > 0 && React.createElement("div", { className: "mt-3" },
+                    React.createElement("div", { className: "text-xs font-bold text-gray-600 mb-2" }, "登録済み仕入先（クリックで選択）"),
+                    React.createElement("div", { className: "flex flex-wrap gap-2" },
+                        supplierOptions.map(name => React.createElement("button", { key: name, type: "button", onClick: () => set('supplier', name), className: `px-3 py-1.5 rounded-full border font-bold text-sm ${String(f.supplier || '') === String(name) ? 'bg-amber-500 border-amber-500 text-white' : 'bg-white border-amber-200 text-gray-800 hover:bg-amber-100'}` }, name))))),
             React.createElement(Field, { label: "内容量" },
                 React.createElement(NumberEntry, { value: f.contentAmount, onChange: v => set('contentAmount', v), min: 0, step: 0.1, fallback: '0', placeholder: "例: 500 / 0.5" })),
             React.createElement(Field, { label: "内容量の単位（選択・手入力）" },
@@ -1371,7 +1407,7 @@ function TransactionsView({ inventory, transactions, recordMovement }) {
                             t.baseUnit) : null)); }),
                 !transactions.length && React.createElement(Empty, { text: "\u5C65\u6B74\u304C\u3042\u308A\u307E\u305B\u3093\u3002" }))));
 }
-function ScanInspectionView({ inventory, setInventory, setTransactions, setAlerts, api, saveProduct, pullFromSheet, recordMovement }) {
+function ScanInspectionView({ inventory, setInventory, setTransactions, setAlerts, suppliers = [], supplierRecords = [], api, saveProduct, pullFromSheet, recordMovement }) {
     const [mode, setMode] = useState('barcode');
     return React.createElement("div", { className: "space-y-5" },
         React.createElement("div", { className: "grid grid-cols-2 gap-2 max-w-2xl" },
@@ -1381,7 +1417,7 @@ function ScanInspectionView({ inventory, setInventory, setTransactions, setAlert
             React.createElement("button", { onClick: () => setMode('receipt'), className: `py-3 rounded-xl border-2 font-extrabold flex items-center justify-center gap-2 ${mode === 'receipt' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-gray-300'}` },
                 React.createElement(ClipboardCheck, { size: 20 }),
                 "\u9818\u53CE\u66F8OCR\u30FB\u691C\u54C1")),
-        mode === 'barcode' ? React.createElement(ProductScanPanel, { inventory: inventory, saveProduct: saveProduct, api: api, recordMovement: recordMovement }) : React.createElement(ReceiptInspectionPanel, { inventory: inventory, api: api, setInventory: setInventory, setTransactions: setTransactions, setAlerts: setAlerts, pullFromSheet: pullFromSheet }));
+        mode === 'barcode' ? React.createElement(ProductScanPanel, { inventory: inventory, saveProduct: saveProduct, api: api, recordMovement: recordMovement }) : React.createElement(ReceiptInspectionPanel, { inventory: inventory, suppliers: suppliers, supplierRecords: supplierRecords, api: api, setInventory: setInventory, setTransactions: setTransactions, setAlerts: setAlerts, pullFromSheet: pullFromSheet }));
 }
 function ProductScanPanel({ inventory, saveProduct, api, recordMovement }) {
     const [barcode, setBarcode] = useState('');
@@ -1603,7 +1639,7 @@ function LiveBarcodeScanner({ onDetected }) {
         React.createElement("br", null),
         "Android Chrome等で開くか、手入力・商品画像補助を利用してください。"));
 }
-// v2.7.10: Product form is fully manually editable; quantity thresholds use 0.1 increments and editable units; current-stock edits persist with adjustment history.
+// v2.7.13: Supplier master, supplier spend totals, receipt supplier correction, and Google Apps Script optimization service added.
 let __bakeruTesseractLoader = null;
 let __bakeruOcrWorkerPromise = null;
 let __bakeruOcrProgressHandler = null;
@@ -1753,7 +1789,7 @@ function attachReceiptInventory(items, inventory) {
     });
 }
 
-function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions, setAlerts, pullFromSheet }) {
+function ReceiptInspectionPanel({ inventory, suppliers = [], supplierRecords = [], api, setInventory, setTransactions, setAlerts, pullFromSheet }) {
     var _a, _b;
     const fileRef = useRef(null);
     const [preview, setPreview] = useState('');
@@ -1942,8 +1978,13 @@ function ReceiptInspectionPanel({ inventory, api, setInventory, setTransactions,
                     React.createElement("summary", { className: "font-bold cursor-pointer" }, "OCRの生テキストを確認"),
                     React.createElement("pre", { className: "mt-3 whitespace-pre-wrap text-xs leading-5 max-h-56 overflow-auto" }, receipt.ocrMeta.rawText)),
                 React.createElement("div", { className: "grid sm:grid-cols-3 gap-3 mb-4" },
-                    React.createElement(Field, { label: "\u4ED5\u5165\u5148" },
-                        React.createElement("input", { className: "input", value: receipt.vendor || '', onChange: e => setReceipt(r => ({ ...r, vendor: e.target.value })) })),
+                    React.createElement("div", null,
+                        React.createElement(Field, { label: "仕入先（選択・手入力）" },
+                            React.createElement("input", { className: "input", value: receipt.vendor || '', onChange: e => setReceipt(r => ({ ...r, vendor: e.target.value })), placeholder: "OCR結果を修正できます" })),
+                        (suppliers || []).length > 0 && React.createElement("select", { className: "input mt-2 text-sm", value: "", onChange: e => { if (e.target.value) setReceipt(r => ({ ...r, vendor:e.target.value })); } },
+                            React.createElement("option", { value: "" }, "登録済み仕入先から選択"),
+                            (suppliers || []).map(n => React.createElement("option", { key:n, value:n }, n))),
+                        receipt.vendor && !(suppliers || []).includes(receipt.vendor) && React.createElement("button", { type:"button", onClick:async()=>{ try { await api('upsertSupplier',{name:receipt.vendor}); await pullFromSheet(true); toast('この仕入先をマスターへ追加しました。'); } catch(e){ toast(e.message,'error'); } }, className:"mt-2 text-xs px-3 py-1.5 rounded-lg bg-amber-100 text-amber-900 font-bold border border-amber-300" }, "＋ この仕入先を登録")),
                     React.createElement(Field, { label: "\u65E5\u4ED8" },
                         React.createElement("input", { className: "input", value: receipt.date || '', onChange: e => setReceipt(r => ({ ...r, date: e.target.value })), placeholder: "YYYY-MM-DD" })),
                     React.createElement(Field, { label: "\u9818\u53CE\u66F8\u5408\u8A08" },
@@ -2073,9 +2114,78 @@ function StocktakeView({ inventory, api, setInventory, setAlerts, pullFromSheet 
         React.createElement("div", { className: "sticky bottom-20 md:bottom-4 z-10" },
             React.createElement("button", { onClick: save, disabled: saving, className: `w-full py-4 rounded-2xl text-white font-black shadow-xl ${varianceCount ? 'bg-red-600' : 'bg-blue-600'}` }, saving ? '保存中...' : `棚卸を確定してSheetへ転記${varianceCount ? `（差異 ${varianceCount}件）` : ''}`)));
 }
-function AnalysisView({ inventory, transactions, api }) {
+function SupplierManagementView({ suppliers = [], supplierRecords = [], supplierTotals = [], api, pullFromSheet, testMode }) {
+    const [editingId, setEditingId] = useState('');
+    const [name, setName] = useState('');
+    const [aliases, setAliases] = useState('');
+    const [note, setNote] = useState('');
+    const [saving, setSaving] = useState(false);
+    const money = n => `¥${Math.round(Number(n || 0)).toLocaleString('ja-JP')}`;
+    const totalAll = (supplierTotals || []).reduce((sum, x) => sum + Number(x.total || 0), 0);
+    const reset = () => { setEditingId(''); setName(''); setAliases(''); setNote(''); };
+    const edit = r => { setEditingId(r.id || ''); setName(r.name || ''); setAliases(r.aliases || ''); setNote(r.note || ''); window.scrollTo({ top:0, behavior:'smooth' }); };
+    const save = async () => {
+        if (!name.trim()) return toast('仕入先名を入力してください。', 'warn');
+        setSaving(true);
+        try {
+            await api('upsertSupplier', { id:editingId || '', name:name.trim(), aliases:aliases.trim(), note:note.trim() });
+            await pullFromSheet(true);
+            toast(editingId ? '仕入先を更新しました。' : '仕入先を追加しました。');
+            reset();
+        } catch (e) { toast(e.message, 'error'); }
+        finally { setSaving(false); }
+    };
+    const del = async r => {
+        if (!confirm(`仕入先「${r.name}」を削除しますか？\n商品や過去の領収書データ自体は削除しません。`)) return;
+        try { await api('deleteSupplier', { id:r.id }); await pullFromSheet(true); toast('仕入先マスタから削除しました。'); }
+        catch (e) { toast(e.message, 'error'); }
+    };
+    const registeredNames = new Set((supplierRecords || []).map(r => String(r.name || '')));
+    const unregistered = (suppliers || []).filter(x => !registeredNames.has(String(x)));
+    return React.createElement("div", { className: "space-y-5" },
+        React.createElement(Card, { className: "p-5 md:p-7 border-amber-300 bg-amber-50/40" },
+            React.createElement("div", { className: "flex items-start gap-3" },
+                React.createElement("div", { className: "w-11 h-11 rounded-xl bg-amber-500 text-white flex items-center justify-center" }, React.createElement(Truck, null)),
+                React.createElement("div", null,
+                    React.createElement("h3", { className: "font-black text-xl" }, "仕入先マスター"),
+                    React.createElement("p", { className: "text-sm text-gray-700 mt-1" }, "商品登録や領収書OCRで使う仕入先を追加・修正・削除できます。別名には『ドラッグストアコスモス, コスモス』のように入力できます。"))),
+            React.createElement("div", { className: "grid md:grid-cols-3 gap-3 mt-5" },
+                React.createElement(Field, { label: "仕入先名 *" }, React.createElement("input", { value:name, onChange:e=>setName(e.target.value), className:"input", placeholder:"例：業務スーパー" })),
+                React.createElement(Field, { label: "別名（カンマ区切り）" }, React.createElement("input", { value:aliases, onChange:e=>setAliases(e.target.value), className:"input", placeholder:"例：コスモス, ドラッグストアコスモス" })),
+                React.createElement(Field, { label: "備考" }, React.createElement("input", { value:note, onChange:e=>setNote(e.target.value), className:"input", placeholder:"担当・支払条件など" }))),
+            React.createElement("div", { className: "flex flex-col sm:flex-row gap-2 mt-4" },
+                React.createElement("button", { onClick:save, disabled:saving, className:"px-5 py-2.5 rounded-xl bg-amber-500 text-gray-950 font-black" }, saving ? '保存中...' : editingId ? '仕入先を更新' : '＋仕入先を追加'),
+                editingId && React.createElement("button", { onClick:reset, className:"px-5 py-2.5 rounded-xl bg-white border-2 border-gray-300 font-bold" }, '編集をキャンセル'))),
+        React.createElement("div", { className: "grid sm:grid-cols-3 gap-3" },
+            React.createElement(Card, { className:"p-4" }, React.createElement("div", { className:"text-xs text-gray-500 font-bold" }, '登録仕入先'), React.createElement("div", { className:"text-2xl font-black mt-1" }, `${(supplierRecords||[]).length}件`)),
+            React.createElement(Card, { className:"p-4" }, React.createElement("div", { className:"text-xs text-gray-500 font-bold" }, '仕入総額（全期間）'), React.createElement("div", { className:"text-2xl font-black mt-1" }, money(totalAll))),
+            React.createElement(Card, { className:"p-4" }, React.createElement("div", { className:"text-xs text-gray-500 font-bold" }, testMode ? 'テストモード' : '集計対象'), React.createElement("div", { className:"text-sm font-black mt-2" }, '領収書OCR + 手動入庫（重複除外）'))),
+        React.createElement(Card, { className:"p-5" },
+            React.createElement("h3", { className:"font-black text-lg" }, '仕入先別 仕入金額'),
+            React.createElement("div", { className:"overflow-x-auto mt-4 rounded-xl border" },
+                React.createElement("table", { className:"w-full text-sm" },
+                    React.createElement("thead", { className:"bg-gray-50" }, React.createElement("tr", null, React.createElement(Th,null,'仕入先'), React.createElement(Th,null,'合計'), React.createElement(Th,null,'領収書OCR'), React.createElement(Th,null,'手動入庫'), React.createElement(Th,null,'件数'))),
+                    React.createElement("tbody", null, (supplierTotals||[]).map(x => React.createElement("tr", { key:x.name, className:"border-t" }, React.createElement(Td,null,React.createElement("span",{className:"font-black"},x.name)), React.createElement(Td,null,React.createElement("span",{className:"font-black"},money(x.total))), React.createElement(Td,null,money(x.receiptTotal)), React.createElement(Td,null,money(x.manualTotal)), React.createElement(Td,null,x.count))))))),
+        React.createElement(Card, { className:"p-5" },
+            React.createElement("h3", { className:"font-black text-lg" }, '登録済み仕入先'),
+            React.createElement("div", { className:"grid md:grid-cols-2 xl:grid-cols-3 gap-3 mt-4" },
+                (supplierRecords||[]).map(r => React.createElement("div", { key:r.id, className:"p-4 rounded-xl border-2 border-gray-200 bg-white" },
+                    React.createElement("div", { className:"font-black text-lg" }, r.name),
+                    r.aliases && React.createElement("div", { className:"text-xs text-gray-600 mt-1" }, `別名: ${r.aliases}`),
+                    r.note && React.createElement("div", { className:"text-xs text-gray-500 mt-1" }, r.note),
+                    React.createElement("div", { className:"flex gap-2 mt-3" }, React.createElement("button", { onClick:()=>edit(r), className:"flex-1 py-2 rounded-lg bg-blue-50 text-blue-800 font-bold" }, '修正'), React.createElement("button", { onClick:()=>del(r), className:"flex-1 py-2 rounded-lg bg-red-50 text-red-700 font-bold" }, '削除'))))),
+            unregistered.length > 0 && React.createElement("div", { className:"mt-5 p-4 rounded-xl bg-blue-50 border border-blue-200" },
+                React.createElement("div", { className:"font-black text-blue-900" }, '商品・領収書から見つかった未登録候補'),
+                React.createElement("div", { className:"flex flex-wrap gap-2 mt-2" }, unregistered.map(n => React.createElement("button", { key:n, onClick:()=>{setName(n);setAliases('');setNote('');setEditingId('');}, className:"px-3 py-1.5 rounded-full bg-white border border-blue-300 font-bold" }, `＋ ${n}`))))));
+}
+
+function AnalysisView({ inventory, transactions, suppliers = [], api }) {
     const [text, setText] = useState('');
     const [loading, setLoading] = useState(false);
+    const [optBudget, setOptBudget] = useState('');
+    const [optSupplier, setOptSupplier] = useState('');
+    const [optLoading, setOptLoading] = useState(false);
+    const [optResult, setOptResult] = useState(null);
     const run = async () => { var _a; setLoading(true); try {
         const r = await api('geminiAnalysis', { inventory: inventory.map(x => ({ name: x.name, stock: x.stock, minStock: x.minStock, cost: x.cost })), transactions: transactions.slice(0, 100) });
         setText(((_a = r.data) === null || _a === void 0 ? void 0 : _a.text) || '');
@@ -2086,18 +2196,73 @@ function AnalysisView({ inventory, transactions, api }) {
     finally {
         setLoading(false);
     } };
+    const runOptimization = async () => {
+        setOptLoading(true);
+        try {
+            const r = await api('optimizeReorder', { budget: Number(optBudget || 0), supplier: optSupplier || '' });
+            setOptResult((r && r.data) || null);
+            toast('発注最適化が完了しました。');
+        } catch (e) {
+            toast(e.message || '発注最適化に失敗しました。', 'error');
+        } finally {
+            setOptLoading(false);
+        }
+    };
+    const money = n => `¥${Math.round(Number(n || 0)).toLocaleString('ja-JP')}`;
     return React.createElement("div", { className: "space-y-5" },
         React.createElement(Card, { className: "p-5 md:p-7 bg-gradient-to-r from-blue-700 to-indigo-700 text-white border-0" },
             React.createElement("div", { className: "flex flex-col md:flex-row justify-between gap-4 items-start md:items-center" },
                 React.createElement("div", null,
                     React.createElement("h3", { className: "font-black text-2xl flex items-center gap-2" },
                         React.createElement(BrainCircuit, null),
-                        "Gemini \u5728\u5EAB\u30A2\u30CA\u30EA\u30B9\u30C8"),
-                    React.createElement("p", { className: "text-blue-100 mt-2" }, "\u5728\u5EAB\u4E0D\u8DB3\u3001\u6EDE\u7559\u5728\u5EAB\u3001\u4ED5\u5165\u50BE\u5411\u3001\u5DEE\u7570\u30EA\u30B9\u30AF\u3092\u5206\u6790\u3057\u307E\u3059\u3002API\u30AD\u30FC\u306FGAS\u5074\u306B\u4FDD\u7BA1\u3055\u308C\u307E\u3059\u3002")),
+                        "Gemini 在庫アナリスト"),
+                    React.createElement("p", { className: "text-blue-100 mt-2" }, "在庫不足、滞留在庫、仕入傾向、差異リスクを分析します。APIキーはGAS側に保管されます。")),
                 React.createElement("button", { onClick: run, disabled: loading || !inventory.length, className: "px-6 py-3 rounded-xl bg-white text-blue-800 font-black disabled:opacity-50" }, loading ? '分析中...' : '分析レポート生成'))),
         text && React.createElement(Card, { className: "p-5 md:p-8" },
-            React.createElement(SimpleMarkdown, { text: text })));
+            React.createElement(SimpleMarkdown, { text: text })),
+        React.createElement(Card, { className: "p-5 md:p-7 border-emerald-300 bg-emerald-50/40" },
+            React.createElement("div", { className: "flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4" },
+                React.createElement("div", null,
+                    React.createElement("div", { className: "text-xs font-black text-emerald-700" }, "AI不要・追加APIキー不要"),
+                    React.createElement("h3", { className: "font-black text-xl md:text-2xl mt-1 flex items-center gap-2" },
+                        React.createElement(Truck, null),
+                        "Google 発注最適化（OR-Tools系）"),
+                    React.createElement("p", { className: "text-sm text-gray-700 mt-2 max-w-3xl leading-7" }, "現在庫・注意ライン・レッドライン・仕入単位・換算量・仕入単価を使い、限られた予算の中でどの商品を何単位発注するかを自動計算します。レッド在庫を最優先します。")),
+                React.createElement("div", { className: "text-xs rounded-xl bg-white border border-emerald-200 p-3 text-emerald-900 font-bold" }, "Google Apps Script 最適化サービスを使用")),
+            React.createElement("div", { className: "grid md:grid-cols-[1fr_1fr_auto] gap-3 mt-5 items-end" },
+                React.createElement(Field, { label: "発注予算上限（円）" },
+                    React.createElement("input", { inputMode: "numeric", value: optBudget, onChange: e => setOptBudget(e.target.value.replace(/[^0-9]/g,'')), className: "input font-black", placeholder: "例：30000 / 空欄または0で制限なし" })),
+                React.createElement(Field, { label: "仕入先で絞り込み（任意）" },
+                    React.createElement("select", { value: optSupplier, onChange: e => setOptSupplier(e.target.value), className: "input font-bold" },
+                        React.createElement("option", { value: "" }, "すべての仕入先"),
+                        (suppliers || []).map(name => React.createElement("option", { key: name, value: name }, name)))),
+                React.createElement("button", { onClick: runOptimization, disabled: optLoading || !inventory.length, className: "h-[44px] px-6 rounded-xl bg-emerald-600 text-white font-black disabled:opacity-50" }, optLoading ? '計算中...' : '最適発注を計算')),
+            React.createElement("div", { className: "text-xs text-gray-600 mt-3 leading-6" }, "※ 仕入単価が0の商品は計算から除外されます。発注量は仕入単位（袋・箱・kgなど）で整数計算し、注意ラインまで補充する範囲で提案します。")),
+        optResult && React.createElement(Card, { className: "p-5 md:p-7" },
+            React.createElement("div", { className: "flex flex-col md:flex-row md:items-center md:justify-between gap-3" },
+                React.createElement("div", null,
+                    React.createElement("h3", { className: "font-black text-xl" }, "発注最適化結果"),
+                    React.createElement("div", { className: "text-sm text-gray-600 mt-1" }, optResult.message || '')),
+                React.createElement("div", { className: "grid grid-cols-2 gap-2 text-center" },
+                    React.createElement("div", { className: "px-4 py-2 rounded-xl bg-gray-50 border" }, React.createElement("div", { className: "text-xs text-gray-500" }, "予定仕入額"), React.createElement("div", { className: "font-black text-lg" }, money(optResult.totalCost))),
+                    React.createElement("div", { className: "px-4 py-2 rounded-xl bg-gray-50 border" }, React.createElement("div", { className: "text-xs text-gray-500" }, "残予算"), React.createElement("div", { className: "font-black text-lg" }, optResult.remainingBudget === null || optResult.remainingBudget === undefined ? '制限なし' : money(optResult.remainingBudget))))),
+            Array.isArray(optResult.recommendations) && optResult.recommendations.length ? React.createElement("div", { className: "overflow-x-auto mt-5 rounded-xl border" },
+                React.createElement("table", { className: "w-full text-sm" },
+                    React.createElement("thead", { className: "bg-gray-50" }, React.createElement("tr", null,
+                        React.createElement(Th, null, "優先"), React.createElement(Th, null, "商品"), React.createElement(Th, null, "仕入先"), React.createElement(Th, null, "現在庫"), React.createElement(Th, null, "発注"), React.createElement(Th, null, "発注後"), React.createElement(Th, null, "予定額"))),
+                    React.createElement("tbody", null, optResult.recommendations.map(r => React.createElement("tr", { key: r.productId, className: "border-t" },
+                        React.createElement(Td, null, React.createElement("span", { className: `font-black ${String(r.priority).includes('🔴') ? 'text-red-700' : 'text-amber-700'}` }, r.priority)),
+                        React.createElement(Td, null, React.createElement("div", { className: "font-bold" }, r.name), React.createElement("div", { className: "text-xs text-gray-500" }, r.sku || '')),
+                        React.createElement(Td, null, r.supplier || '未設定'),
+                        React.createElement(Td, null, `${r.currentStock} ${r.baseUnit}`),
+                        React.createElement(Td, null, React.createElement("div", { className: "font-black" }, `${r.purchaseQuantity} ${r.purchaseUnit}`), React.createElement("div", { className: "text-xs text-gray-500" }, `+${r.addedBaseQuantity} ${r.baseUnit}`)),
+                        React.createElement(Td, null, `${r.projectedStock} ${r.baseUnit}`),
+                        React.createElement(Td, null, React.createElement("span", { className: "font-black" }, money(r.estimatedCost)))))))) : React.createElement("div", { className: "mt-5 p-4 rounded-xl bg-gray-50 border text-gray-600" }, "現在、最適化対象の商品はありません。"),
+            Array.isArray(optResult.skipped) && optResult.skipped.length > 0 && React.createElement("details", { className: "mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200" },
+                React.createElement("summary", { className: "font-bold cursor-pointer" }, `計算対象外 ${optResult.skipped.length}件`),
+                React.createElement("div", { className: "mt-2 space-y-1 text-sm" }, optResult.skipped.map((x,i) => React.createElement("div", { key: i }, `${x.name}: ${x.reason}`))))));
 }
+
 function SettingsView({ gasUrl, setGasUrl, syncToken, setSyncToken, connection, api, pullFromSheet, flushQueue, inventory }) {
     const [testing, setTesting] = useState(false);
     const [info, setInfo] = useState(null);
@@ -2292,4 +2457,4 @@ catch (err) {
   </script>
 </body>
 </html>
-<!-- v2.7.10: unit selector replaced with manual text + full custom dropdown so all unit options remain visible. -->
+<!-- v2.7.13: supplier master + spend totals + reorder optimization. -->
